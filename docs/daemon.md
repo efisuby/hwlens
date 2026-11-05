@@ -54,12 +54,15 @@ Decisions:
   A root client may do anything.
 * Every action and every refusal is logged.
 
-**5. Packaging and hardening.**
+**5. Packaging and hardening.** *Done.*
 * `hwlensd.socket`: `ListenStream=/run/hwlensd/hwlensd.sock`, `SocketGroup=hwlens`, `SocketMode=0660`.
 * `hwlensd.service`:
   * `CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_PERFMON CAP_KILL CAP_SYS_NICE`;
   * `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp`.
-* The package creates the `hwlens` group and drops the setcap on `/usr/bin/hwlens`.
+* `ProtectHome=read-only` rather than `yes`, so that `statvfs()` of a separate `/home` sees the real file system.
+* The package creates the `hwlens` group (sysusers.d), adds the installing sudo user to it,
+  enables the socket and drops the setcap on `/usr/bin/hwlens`.
+* `systemd-analyze security hwlensd.service`: exposure 4.6 (OK).
 
 **6. Desktop widget.** A KDE Plasma plasmoid in QML with a small C++ plugin that
 reads the same JSON lines through `QLocalSocket`.
