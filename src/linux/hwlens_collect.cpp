@@ -142,12 +142,7 @@ namespace Cpu {
 	vector<long long> core_old_totals;
 	vector<long long> core_old_idles;
 	vector<fs::path> core_freq;
-	vector<string> available_fields = {"Auto", "total"};
-	vector<string> available_sensors = {"Auto"};
 	cpu_info current_cpu;
-	bool got_sensors{};
-	bool cpu_temp_only{};
-	bool supports_watts = true;
 
 	//* Populate found_sensors map
 	bool get_sensors();
@@ -167,7 +162,6 @@ namespace Cpu {
 	std::unordered_map<string, Sensor> found_sensors;
 	string cpu_sensor;
 	vector<string> core_sensors;
-	std::unordered_map<int, int> core_mapping;
 
 	struct FanSensor {
 		fs::path path;
@@ -348,7 +342,7 @@ namespace Mem {
 namespace Shared {
 
 	fs::path procPath, passwd_path;
-	long pageSize, clkTck, coreCount;
+	long pageSize, clkTck;
 
 	void init() {
 
@@ -472,10 +466,6 @@ namespace Shared {
 }
 
 namespace Cpu {
-	string cpuName;
-	string cpuHz;
-	bool has_battery = true;
-	tuple<int, float, long, string> current_bat;
 
 	const array time_names {
 		"user"s, "nice"s, "system"s, "idle"s, "iowait"s,
@@ -2478,6 +2468,12 @@ namespace Gpu {
 			Shared::trim_history(gpu.gpu_percent.at("gpu-vram-totals"));
 		}
 
+		//? No usable GPU (backend failed to init): nothing to average
+		if (gpus.empty()) {
+			count = 0;
+			return gpus;
+		}
+
 		shared_gpu_percent.at("gpu-average").push_back(avg / gpus.size());
 		if (mem_total != 0)
 			shared_gpu_percent.at("gpu-vram-total").push_back(static_cast<long long>(round(mem_usage_total * 100.0 / mem_total)));
@@ -2551,10 +2547,8 @@ namespace Mem {
 		}
 	}
 
-	bool has_swap{};
 	vector<string> fstab;
 	fs::file_time_type fstab_time;
-	int disk_ios{};
 	vector<string> last_found;
 
 	//?* Find the filepath to the specified ZFS object's stat file
@@ -3132,14 +3126,9 @@ namespace Mem {
 }
 
 namespace Net {
-	std::unordered_map<string, net_info> current_net;
 	net_info empty_net = {};
-	vector<string> interfaces;
-	string selected_iface;
 	int errors{};
-	std::unordered_map<string, uint64_t> graph_max = { {"download", {}}, {"upload", {}} };
 	std::unordered_map<string, array<int, 2>> max_count = { {"download", {}}, {"upload", {}} };
-	bool rescale{true};
 	uint64_t timestamp{};
 
 	auto collect(bool no_update) -> net_info& {
@@ -3367,7 +3356,6 @@ namespace Proc {
 	uint64_t old_cputimes{};
 	bool collected_new{};
 
-	detail_container detailed;
 	constexpr size_t KTHREADD = 2;
 	static std::unordered_set<size_t> kernels_procs = {KTHREADD};
 	static std::unordered_set<size_t> dead_procs;

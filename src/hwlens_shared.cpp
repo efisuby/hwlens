@@ -32,13 +32,51 @@ namespace fs = std::filesystem;
 namespace rng = std::ranges;
 using namespace Tools;
 
+//* State written by the collectors and read by the UI. Defined here so that both the daemon,
+//* which fills it from the collectors, and the client, which fills it from snapshots, have it.
 namespace Shared {
 	CollectOptions collect_opts;
+	long coreCount{1};
+}
+
+namespace Runner {
+	atomic<bool> stopping (false);
+	atomic<bool> coreNum_reset (false);
+}
+
+namespace Mem {
+	bool redraw = true;
+	bool has_swap{};
+	int disk_ios{};
+}
+
+namespace Net {
+	std::unordered_map<string, net_info> current_net;
+	vector<string> interfaces;
+	string selected_iface;
+	std::unordered_map<string, uint64_t> graph_max = { {"download", {}}, {"upload", {}} };
+	bool rescale{true};
+	bool redraw = true;
+}
+
+namespace Proc {
+	bool redraw = true;
+	detail_container detailed;
 }
 
 namespace Cpu {
 	vector<char> core_kinds;
 	vector<string> available_batteries = {"Auto"};
+	vector<string> available_fields = {"Auto", "total"};
+	vector<string> available_sensors = {"Auto"};
+	bool got_sensors{};
+	bool cpu_temp_only{};
+	bool supports_watts = true;
+	std::unordered_map<int, int> core_mapping;
+	string cpuName;
+	string cpuHz;
+	bool has_battery = true;
+	tuple<int, float, long, string> current_bat;
 
     std::optional<std::string> container_engine;
 
@@ -92,6 +130,7 @@ namespace Cpu {
 
 #ifdef GPU_SUPPORT
 namespace Gpu {
+	int count = 0;
 	vector<string> gpu_names;
 	vector<int> gpu_b_height_offsets;
 	std::unordered_map<string, deque<long long>> shared_gpu_percent = {

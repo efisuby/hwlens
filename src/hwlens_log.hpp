@@ -29,6 +29,7 @@ namespace Logger {
 		void log_write(Level level, const std::string_view msg);
 	} // namespace detail
 
+	//* Log to <path>, or to stderr when <path> is "-"
 	void init(const std::filesystem::path& path);
 
 	void set_log_level(Level level);

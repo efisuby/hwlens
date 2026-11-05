@@ -15,5 +15,5 @@ endif()
 # Disable all warnings
 target_compile_options(igt PRIVATE -w)
 
-# Link igt into hwlens
-target_link_libraries(libhwlens $<TARGET_OBJECTS:igt>)
+# Link igt into the collectors
+target_link_libraries(hwlens_collect PUBLIC $<TARGET_OBJECTS:igt>)

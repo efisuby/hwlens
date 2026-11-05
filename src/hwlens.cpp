@@ -328,10 +328,8 @@ void init_config(bool low_color, std::optional<std::string>& filter) {
 //* Manages secondary thread for collection and drawing of boxes
 namespace Runner {
 	atomic_waiting_lock active;
-	atomic<bool> stopping (false);
 	atomic<bool> waiting (false);
 	atomic<bool> redraw (false);
-	atomic<bool> coreNum_reset (false);
 
 	static inline auto set_active(bool value) noexcept {
 		active.store(value);

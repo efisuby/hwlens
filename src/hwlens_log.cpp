@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <iostream>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -140,9 +141,15 @@ namespace Logger {
 				msg
 			);
 
+			auto& path = state.path.value();
+			//? "-" logs to stderr, used by hwlensd under systemd (the journal adds its own timestamps)
+			if (path == "-") {
+				std::cerr << buffer << std::flush;
+				return;
+			}
+
 			DropPrivilegeGuard privilege_guard {};
 
-			auto& path = state.path.value();
 			if (!rotate_log_file(path)) {
 				return;
 			}

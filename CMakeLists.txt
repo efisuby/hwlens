@@ -44,34 +44,49 @@ if(HWLENS_STATIC)
   set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 endif()
 
-add_executable(hwlens src/main.cpp)
-add_library(libhwlens OBJECT
-  src/hwlens.cpp
-  src/hwlens_cli.cpp
-  src/hwlens_config.cpp
-  src/hwlens_draw.cpp
-  src/hwlens_input.cpp
-  src/hwlens_log.cpp
-  src/hwlens_menu.cpp
-  src/hwlens_shared.cpp
-  src/hwlens_theme.cpp
-  src/hwlens_tools.cpp
-)
-
-target_link_libraries(hwlens libhwlens)
-
-if(HWLENS_LTO)
-  check_ipo_supported()
-  set_target_properties(hwlens PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
-  set_target_properties(libhwlens PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
-endif()
-
 if(NOT LINUX)
   message(FATAL_ERROR "${CMAKE_SYSTEM_NAME} is not supported, hwlens runs on Linux only")
 endif()
-target_sources(libhwlens PRIVATE src/linux/hwlens_collect.cpp)
+
+find_package(nlohmann_json 3.11 REQUIRED)
+
+# Code shared by the daemon and the client: settings, logging, tools, snapshot JSON
+add_library(hwlens_core OBJECT
+  src/hwlens_config.cpp
+  src/hwlens_json.cpp
+  src/hwlens_log.cpp
+  src/hwlens_shared.cpp
+  src/hwlens_tools.cpp
+)
+target_link_libraries(hwlens_core PUBLIC nlohmann_json::nlohmann_json)
+
+# Data collectors, used by the daemon
+add_library(hwlens_collect OBJECT src/linux/hwlens_collect.cpp)
+target_link_libraries(hwlens_collect PUBLIC hwlens_core)
 if(HWLENS_GPU)
   add_subdirectory(src/linux/intel_gpu_top)
+endif()
+
+# Terminal UI
+add_library(libhwlens OBJECT
+  src/hwlens.cpp
+  src/hwlens_cli.cpp
+  src/hwlens_draw.cpp
+  src/hwlens_input.cpp
+  src/hwlens_menu.cpp
+  src/hwlens_theme.cpp
+)
+target_link_libraries(libhwlens PUBLIC hwlens_core)
+
+add_executable(hwlens src/main.cpp)
+target_link_libraries(hwlens libhwlens hwlens_core hwlens_collect)
+
+add_executable(hwlensd src/hwlensd.cpp)
+target_link_libraries(hwlensd hwlens_collect hwlens_core)
+
+if(HWLENS_LTO)
+  check_ipo_supported(LANGUAGES CXX)
+  set_target_properties(hwlens hwlensd libhwlens hwlens_core hwlens_collect PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
 # Generate build info
@@ -122,36 +137,36 @@ if(NOT HAS_CXX_STRING_CONTAINS)
   message(FATAL_ERROR "The compiler doesn't support std::string::contains")
 endif()
 
-target_compile_options(libhwlens PUBLIC -Wall -Wextra -Wpedantic)
+target_compile_options(hwlens_core PUBLIC -Wall -Wextra -Wpedantic)
 
 include(CheckCXXCompilerFlag)
 
-target_compile_options(libhwlens PUBLIC -fstack-clash-protection)
+target_compile_options(hwlens_core PUBLIC -fstack-clash-protection)
 check_cxx_compiler_flag(-fstack-protector HAS_FSTACK_PROTECTOR)
 if(HAS_FSTACK_PROTECTOR)
-  target_compile_options(libhwlens PUBLIC -fstack-protector)
+  target_compile_options(hwlens_core PUBLIC -fstack-protector)
 endif()
 check_cxx_compiler_flag(-fcf-protection HAS_FCF_PROTECTION)
 if(HAS_FCF_PROTECTION)
-  target_compile_options(libhwlens PUBLIC -fcf-protection)
+  target_compile_options(hwlens_core PUBLIC -fcf-protection)
 endif()
 
-target_compile_definitions(libhwlens PUBLIC
+target_compile_definitions(hwlens_core PUBLIC
   FMT_HEADER_ONLY
   _FILE_OFFSET_BITS=64
   $<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS _LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG>
 )
 
-target_include_directories(libhwlens SYSTEM PUBLIC include)
+target_include_directories(hwlens_core SYSTEM PUBLIC include)
 
 # Enable pthreads
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-target_link_libraries(libhwlens Threads::Threads)
+target_link_libraries(hwlens_core PUBLIC Threads::Threads)
 
 # Enable GPU support
 if(HWLENS_GPU)
-  target_compile_definitions(libhwlens PUBLIC GPU_SUPPORT)
+  target_compile_definitions(hwlens_core PUBLIC GPU_SUPPORT)
 
   if(HWLENS_RSMI_STATIC)
     # ROCm doesn't properly add it's folders to the module path if `CMAKE_MODULE_PATH` is already
@@ -175,16 +190,16 @@ if(HWLENS_GPU)
 
     set(CMAKE_MODULE_PATH _CMAKE_MODULE_PATH)
 
-    target_link_libraries(libhwlens ROCm)
+    target_link_libraries(hwlens_core PUBLIC ROCm)
   endif()
   if(NOT HWLENS_STATIC)
-    target_link_libraries(libhwlens ${CMAKE_DL_LIBS})
+    target_link_libraries(hwlens_core PUBLIC ${CMAKE_DL_LIBS})
   endif()
 endif()
 
 if(HWLENS_STATIC)
-  target_compile_definitions(libhwlens PUBLIC STATIC_BUILD)
-  target_link_options(libhwlens PUBLIC -static LINKER:--fatal-warnings)
+  target_compile_definitions(hwlens_core PUBLIC STATIC_BUILD)
+  target_link_options(hwlens_core PUBLIC -static LINKER:--fatal-warnings)
 endif()
 
 # Check if lowdown is installed
@@ -205,7 +220,7 @@ else()
   message(STATUS "Command 'lowdown' not found: skipping generating man page hwlens.1")
 endif()
 
-install(TARGETS hwlens RUNTIME)
+install(TARGETS hwlens hwlensd RUNTIME)
 install(FILES "hwlens.desktop" DESTINATION "share/applications")
 install(FILES "Img/icon.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME "hwlens.svg")
 install(DIRECTORY "themes" DESTINATION "share/hwlens")

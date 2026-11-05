@@ -93,7 +93,7 @@ namespace Shared {
 	//* Initialize platform specific needed variables and check for errors
 	void init();
 
-	extern long coreCount, page_size, clk_tck;
+	extern long coreCount;
 
 	//* Samples kept for each graph history, independent of the terminal size.
 	//* 600 samples cover a 300 column graph (2 samples per braille cell) or 10 minutes at 1s updates.

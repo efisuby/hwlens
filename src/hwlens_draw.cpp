@@ -1092,7 +1092,7 @@ namespace Gpu {
 	vector<int> b_x_vec = {}, b_y_vec = {};
 	vector<bool> redraw = {};
 	int shown = 0;
-	int count = 0;
+	//? count is defined in hwlens_shared.cpp, the collector sets it
 	vector<int> shown_panels = {};
 	int graph_up_height;
 	vector<Draw::Graph> graph_upper_vec = {}, graph_lower_vec = {};
@@ -1331,7 +1331,7 @@ namespace Mem {
 	int mem_width, disks_width, divider, item_height, mem_size, mem_meter, graph_height, disk_meter;
 	int disks_io_h = 0;
 	int disks_io_half = 0;
-	bool shown = true, redraw = true;
+	bool shown = true; //? redraw is defined in hwlens_shared.cpp, the collector sets it too
 	string box;
 	std::unordered_map<string, Draw::Meter> mem_meters;
 	std::unordered_map<string, Draw::Graph> mem_graphs;
@@ -1679,7 +1679,7 @@ namespace Net {
 	int min_width = 36, min_height = 6;
 	int x = 1, y, width = 20, height;
 	int b_x, b_y, b_width, b_height, d_graph_height, u_graph_height;
-	bool shown = true, redraw = true;
+	bool shown = true; //? redraw is defined in hwlens_shared.cpp, the collector sets it too
 	const int MAX_IFNAMSIZ = 15;
 	string old_ip;
 	std::unordered_map<string, Draw::Graph> graphs;
@@ -1794,7 +1794,7 @@ namespace Proc {
 	int min_width = 44, min_height = 16;
 	int x, y, width = 20, height;
 	int start, selected, select_max;
-	bool shown = true, redraw = true;
+	bool shown = true; //? redraw is defined in hwlens_shared.cpp, the collector sets it too
 	bool is_last_process_in_list = false;
 	int selected_pid = 0, selected_depth = 0;
 	int scroll_pos;

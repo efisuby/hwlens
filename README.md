@@ -31,7 +31,8 @@ over a local socket. The TUI and a desktop widget can then share the same data.
 
 ## Build
 
-Requirements: Linux, CMake 3.25+ and GCC 14 (or Clang 19+).
+Requirements: Linux, CMake 3.25+, GCC 14 (or Clang 19+) and nlohmann-json 3.11+
+(`apt install nlohmann-json3-dev`).
 
 ```sh
 CXX=g++-14 CC=gcc-14 cmake -B build -DCMAKE_BUILD_TYPE=Release -DHWLENS_GPU=ON
