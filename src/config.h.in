@@ -4,6 +4,7 @@
 
 #include <string_view>
 
+constexpr std::string_view HWLENS_VERSION    = "@PROJECT_VERSION@";
 constexpr std::string_view GIT_COMMIT        = "@GIT_COMMIT@";
 constexpr std::string_view COMPILER          = "@COMPILER@";
 constexpr std::string_view COMPILER_VERSION  = "@COMPILER_VERSION@";

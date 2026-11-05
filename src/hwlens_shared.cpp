@@ -24,9 +24,9 @@ tab-size = 4
 #include <string>
 #include <unordered_set>
 
-#include "btop_config.hpp"
-#include "btop_shared.hpp"
-#include "btop_tools.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_shared.hpp"
+#include "hwlens_tools.hpp"
 
 namespace fs = std::filesystem;
 namespace rng = std::ranges;

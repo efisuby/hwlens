@@ -21,10 +21,10 @@ tab-size = 4
 #include <unistd.h>
 #include <algorithm>
 
-#include "btop_config.hpp"
-#include "btop_log.hpp"
-#include "btop_theme.hpp"
-#include "btop_tools.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_log.hpp"
+#include "hwlens_theme.hpp"
+#include "hwlens_tools.hpp"
 
 using std::round;
 using std::stoi;

@@ -1,4 +1,5 @@
 /* Copyright 2021 Aristocratos (jakob@qvantnet.com)
+   Copyright 2024 Santhosh Raju (fox@NetBSD.org)
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -29,7 +30,10 @@ tab-size = 4
 #include <netinet/tcp_fsm.h>
 #include <netinet/in.h> // for inet_ntop stuff
 #include <pwd.h>
+#include <prop/proplib.h>
 #include <sys/endian.h>
+#include <sys/iostat.h>
+#include <sys/envsys.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/statvfs.h>
@@ -39,19 +43,18 @@ tab-size = 4
 #include <sys/siginfo.h>
 #include <sys/proc.h>
 #include <sys/types.h>
-#include <sys/user.h>
 #include <sys/param.h>
 #include <sys/ucred.h>
 #include <sys/mount.h>
 #include <sys/vmmeter.h>
-#include <sys/limits.h>
-#include <sys/sensors.h>
 #include <sys/disk.h>
 #include <vector>
 #include <kvm.h>
 #include <paths.h>
 #include <fcntl.h>
+#include <regex.h>
 #include <unistd.h>
+#include <uvm/uvm_extern.h>
 
 #include <stdexcept>
 #include <cmath>
@@ -62,16 +65,15 @@ tab-size = 4
 #include <regex>
 #include <string>
 #include <memory>
+#include <utility>
 #include <unordered_set>
 
 #include <fmt/format.h>
 
-#include "../btop_config.hpp"
-#include "../btop_log.hpp"
-#include "../btop_shared.hpp"
-#include "../btop_tools.hpp"
-
-#include "./sysctlbyname.h"
+#include "../hwlens_config.hpp"
+#include "../hwlens_log.hpp"
+#include "../hwlens_shared.hpp"
+#include "../hwlens_tools.hpp"
 
 using std::clamp, std::string_literals::operator""s, std::cmp_equal, std::cmp_less, std::cmp_greater;
 using std::ifstream, std::numeric_limits, std::streamsize, std::round, std::max, std::min;
@@ -122,20 +124,23 @@ namespace Shared {
 	long pageSize, clkTck, coreCount, physicalCoreCount, arg_max;
 	int totalMem_len, kfscale;
 	long bootTime;
+	size_t size;
 
 	void init() {
 		//? Shared global variables init
-		int mib[] = {CTL_HW, HW_NCPUONLINE};
-		int ncpu_online;
-		size_t len = sizeof(ncpu_online);
-		if (sysctl(mib, 2, &ncpu_online, &len, nullptr, 0) == -1) {
+		int mib[2];
+		mib[0] = CTL_HW;
+		mib[1] = HW_NCPU;
+		int ncpu;
+		size_t len = sizeof(ncpu);
+		if (sysctl(mib, 2, &ncpu, &len, nullptr, 0) == -1) {
 			Logger::warning("Could not determine number of cores, defaulting to 1.");
 		} else {
-			coreCount = ncpu_online;
+			coreCount = ncpu;
 		}
 
-		pageSize = sysconf(_SC_PAGE_SIZE);
-		if (pageSize <= 0) {
+		size = sizeof(pageSize);
+		if (sysctlbyname("hw.pagesize", &pageSize, &size, nullptr, 0) < 0) {
 			pageSize = 4096;
 			Logger::warning("Could not get system page size. Defaulting to 4096, processes memory usage might be incorrect.");
 		}
@@ -146,12 +151,10 @@ namespace Shared {
 			Logger::warning("Could not get system clock ticks per second. Defaulting to 100, processes cpu usage might be incorrect.");
 		}
 
-		int64_t memsize = 0;
-		size_t size = sizeof(memsize);
-		if (sysctlbyname("hw.physmem", &memsize, &size, nullptr, 0) < 0) {
+		size = sizeof(totalMem);
+		if (sysctlbyname("hw.physmem64", &totalMem, &size, nullptr, 0) < 0) {
 			Logger::warning("Could not get memory size");
 		}
-		totalMem = memsize;
 
 		struct timeval result;
 		size = sizeof(result);
@@ -216,73 +219,152 @@ namespace Cpu {
 		return trim_name(string(buffer));
 	}
 
-	int64_t get_sensor(string device, vector<sensor_type> types, int num) {
-		struct sensordev sensordev;
-		struct sensor sensor;
-		size_t sdlen, slen;
-		int dev;
-		int mib[] = {CTL_HW, HW_SENSORS, 0, 0, 0};
-
-		sdlen = sizeof(sensordev);
-		slen = sizeof(sensor);
-		for (dev = 0;; dev++) {
-			mib[2] = dev;
-			if (sysctl(mib, 3, &sensordev, &sdlen, NULL, 0) == -1) {
-				if (errno == ENXIO)
-					continue;
-				if (errno == ENOENT)
-					break;
-			}
-			if (strstr(sensordev.xname, device.c_str())) {
-				mib[4] = num;
-				for (sensor_type type : types) {
-					mib[3] = type;
-					if (sysctl(mib, 5, &sensor, &slen, NULL, 0) == -1) {
-						if (errno != ENOENT) {
-							Logger::warning("sysctl");
-							continue;
-						}
-					} else
-						return sensor.value;
-				}
-			}
-		}
-		return -1;
-	}
-
 	bool get_sensors() {
 		got_sensors = false;
-		if (Config::getB("show_coretemp") and Config::getB("check_temp")) {
-			if (get_sensor(string("cpu0"), { SENSOR_TEMP }, 0) > 0) {
-				got_sensors = true;
-				current_cpu.temp_max = 100; // we don't have this info
+		prop_dictionary_t dict;
+		prop_object_t fields_array;
+		// List of common thermal sensors in NetBSD.
+		const string sensors[6] = {
+			"coretemp0",
+			"acpitz0",
+			"thinkpad0",
+			"amdzentemp0",
+			"coretemp1",
+			"acpitz1"
+		};
+
+		int fd = open(_PATH_SYSMON, O_RDONLY);
+		if (fd == -1) {
+			Logger::warning("failed to open {}", _PATH_SYSMON);
+			return got_sensors;
+		}
+
+		if (prop_dictionary_recv_ioctl(fd, ENVSYS_GETDICTIONARY, &dict) != 0) {
+			if (fd != -1) {
+				close(fd);
+			}
+			Logger::warning("failed to open envsys dict");
+			return got_sensors;
+		}
+
+		close(fd);
+
+		if (prop_dictionary_count(dict) == 0) {
+			Logger::warning("no drivers registered for envsys");
+			return got_sensors;
+		}
+
+		// Search through a known list of sensors and break the loop on finding the first.
+		for(const string &sensor : sensors) {
+			fields_array = prop_dictionary_get(prop_dictionary_t(dict), sensor.c_str());
+			if (prop_object_type(fields_array) != PROP_TYPE_ARRAY) {
+				Logger::warning("unknown device {}", sensor);
 			} else {
-				Logger::warning("Could not get temp sensor");
+				Cpu::cpu_sensor = sensor;
+				break;
 			}
 		}
+		if (prop_object_type(fields_array) != PROP_TYPE_ARRAY) {
+			return got_sensors;
+		}
+
+		if (Config::getB("show_coretemp") and Config::getB("check_temp")) {
+			got_sensors = true;
+		}
+
 		return got_sensors;
 	}
 
 #define MUKTOC(v) ((v - 273150000) / 1000000.0)
 
 	void update_sensors() {
-		int temp = 0;
-		int p_temp = 0;
+		int64_t current_temp = -1;
+		current_cpu.temp_max = 95;
+		prop_dictionary_t dict, fields, props;
 
-		temp = get_sensor(string("cpu0"), { SENSOR_TEMP }, 0);
-		if (temp > -1) {
-			temp = MUKTOC(temp);
-			p_temp = temp;
-			for (int i = 0; i < Shared::coreCount; i++) {
-				if (cmp_less(i + 1, current_cpu.temp.size())) {
-					current_cpu.temp.at(i + 1).push_back(temp);
-					if (current_cpu.temp.at(i + 1).size() > 20)
-						current_cpu.temp.at(i + 1).pop_front();
+		int fd = open(_PATH_SYSMON, O_RDONLY);
+		if (fd == -1) {
+			Logger::warning("failed to open {}", _PATH_SYSMON);
+			return;
+		}
+
+		if (prop_dictionary_recv_ioctl(fd, ENVSYS_GETDICTIONARY, &dict) != 0) {
+			if (fd != -1) {
+				close(fd);
+			}
+			Logger::warning("failed to open envsys dict");
+			return;
+		}
+
+		close(fd);
+
+		if (prop_dictionary_count(dict) == 0) {
+			Logger::warning("no drivers registered for envsys");
+			return;
+		}
+
+		prop_object_t fields_array = prop_dictionary_get(prop_dictionary_t(dict), Cpu::cpu_sensor.c_str());
+		if (prop_object_type(fields_array) != PROP_TYPE_ARRAY) {
+			Logger::warning("unknown device {}", Cpu::cpu_sensor);
+			return;
+		}
+
+		prop_object_iterator_t fields_iter = prop_array_iterator(prop_array_t(fields_array));
+		if (fields_iter == NULL) {
+			return;
+		}
+
+		regex_t r;
+		if (regcomp(&r, "(cpu[0-9]* )*temperature", REG_EXTENDED)) {
+			Logger::warning("regcomp() failed");
+			return;
+		}
+
+		string prop_description = "no description";
+		char buf[64];
+		while ((fields = (prop_dictionary_t) prop_object_iterator_next(prop_object_iterator_t(fields_iter))) != NULL) {
+			props = (prop_dictionary_t) prop_dictionary_get(fields, "device-properties");
+			if (props != NULL) continue;
+
+			prop_object_t cur_value = prop_dictionary_get(fields, "cur-value");
+			prop_object_t max_value = prop_dictionary_get(fields, "critical-max");
+			prop_object_t description = prop_dictionary_get(fields, "description");
+
+			if (description == NULL || cur_value == NULL) {
+				continue;
+			}
+
+
+			prop_string_copy_value(prop_string_t(description), buf, sizeof buf);
+			prop_description = buf;
+
+			if (regexec(&r, prop_description.c_str(), 0, NULL, 0) == 0) {
+				current_temp = prop_number_signed_value(prop_number_t(cur_value));
+				if (max_value != NULL) {
+					current_cpu.temp_max = MUKTOC(prop_number_signed_value(prop_number_t(max_value)));
 				}
 			}
-			current_cpu.temp.at(0).push_back(p_temp);
-			if (current_cpu.temp.at(0).size() > 20)
+		}
+
+		regfree(&r);
+
+		prop_object_iterator_release(fields_iter);
+		prop_object_release(dict);
+
+		if (current_temp > -1) {
+			current_temp = MUKTOC(current_temp);
+			for (int i = 0; i < Shared::coreCount; i++) {
+				if (cmp_less(i + 1, current_cpu.temp.size())) {
+					current_cpu.temp.at(i + 1).push_back(current_temp);
+					if (current_cpu.temp.at(i + 1).size() > 20) {
+						current_cpu.temp.at(i + 1).pop_front();
+					}
+				}
+			}
+			current_cpu.temp.at(0).push_back(current_temp);
+			if (current_cpu.temp.at(0).size() > 20) {
 				current_cpu.temp.at(0).pop_front();
+			}
 		}
 
 	}
@@ -341,44 +423,111 @@ namespace Cpu {
 	}
 
 	auto get_battery() -> tuple<int, float, long, string> {
-		if (not has_battery) return {0, 0, 0, ""};
+		if (not has_battery) return {0, 0.0, 0, ""};
 
-		long seconds = -1;
-		uint32_t percent = -1;
-		float rate = -1.0f;
-		string status = "discharging";
-		int64_t full, remaining, watts;
-		full = get_sensor("acpibat0", { SENSOR_AMPHOUR, SENSOR_WATTHOUR }, 0);
-		remaining = get_sensor("acpibat0", { SENSOR_AMPHOUR, SENSOR_WATTHOUR }, 3);
-		watts = get_sensor("acpibat0", { SENSOR_WATTS }, 0);
-		int64_t state = get_sensor("acpibat0", { SENSOR_INTEGER }, 0);
-		if (full < 0) {
+		prop_dictionary_t dict, fields, props;
+
+		int64_t total_charge = 0;
+		int64_t total_capacity = 0;
+
+		int fd = open(_PATH_SYSMON, O_RDONLY);
+		if (fd == -1) {
+			Logger::warning("failed to open {}", _PATH_SYSMON);
 			has_battery = false;
-			Logger::warning("failed to get battery");
-		} else {
-			float_t f = full / 1000;
-			float_t r = remaining / 1000;
-			if (watts > 0) {
-				supports_watts = true;
-				rate = watts / 1000000.0f; // watts is given in µW
+			return {0, 0.0, 0, ""};
+		}
+
+		if (prop_dictionary_recv_ioctl(fd, ENVSYS_GETDICTIONARY, &dict) != 0) {
+			if (fd != -1) {
+				close(fd);
 			}
-			has_battery = true;
-			percent = r / f * 100;
-			if (percent == 100) {
-				status = "full";
+			has_battery = false;
+			Logger::warning("failed to open envsys dict");
+			return {0, 0.0, 0, ""};
+		}
+
+		close(fd);
+
+		if (prop_dictionary_count(dict) == 0) {
+			has_battery = false;
+			Logger::warning("no drivers registered for envsys");
+			return {0, 0.0, 0, ""};
+		}
+
+		prop_object_t fields_array = prop_dictionary_get(prop_dictionary_t(dict), "acpibat0");
+		if (prop_object_type(fields_array) != PROP_TYPE_ARRAY) {
+			has_battery = false;
+			Logger::warning("unknown device 'acpibat0'");
+			return {0, 0.0, 0, ""};
+		}
+
+		prop_object_iterator_t fields_iter = prop_array_iterator(prop_array_t(fields_array));
+		if (fields_iter == NULL) {
+			has_battery = false;
+			return {0, 0.0, 0, ""};
+		}
+
+		/* only assume battery is not present if explicitly stated */
+		bool is_battery = false;
+		int64_t is_present = 1;
+		int64_t cur_charge = 0;
+		int64_t max_charge = 0;
+		string status = "unknown";
+		string prop_description = "no description";
+		char buf[64];
+
+		while ((fields = (prop_dictionary_t) prop_object_iterator_next(prop_object_iterator_t(fields_iter))) != NULL) {
+			props = (prop_dictionary_t) prop_dictionary_get(fields, "device-properties");
+			if (props != NULL) continue;
+
+			prop_object_t cur_value = prop_dictionary_get(fields, "cur-value");
+			prop_object_t max_value = prop_dictionary_get(fields, "max-value");
+			prop_object_t description = prop_dictionary_get(fields, "description");
+
+			if (description == NULL || cur_value == NULL) {
+				continue;
 			}
-			switch (state) {
-				case 0:
-					status = "full";
-					percent = 100;
-					break;
-				case 2:
-					status = "charging";
-					break;
+
+
+			prop_string_copy_value(prop_string_t(description), buf, sizeof buf);
+			prop_description = buf;
+
+			if (prop_description == "charge") {
+				if (max_value == NULL) {
+					continue;
+				}
+				cur_charge = prop_number_signed_value(prop_number_t(cur_value));
+				max_charge = prop_number_signed_value(prop_number_t(max_value));
+			}
+
+			if (prop_description == "present") {
+				is_present = prop_number_signed_value(prop_number_t(cur_value));
+			}
+
+			if (prop_description == "charging") {
+				status = prop_description;
+				char buf[64];
+				prop_string_copy_value(prop_string_t(prop_dictionary_get(fields, "type")), buf, sizeof buf);
+				string charging_type = buf;
+				is_battery = charging_type == "Battery charge" ? true : false;
+			}
+
+			if (is_battery && is_present) {
+				total_charge += cur_charge;
+				total_capacity += max_charge;
 			}
 		}
 
-		return {percent, rate, seconds, status};
+		prop_object_iterator_release(fields_iter);
+		prop_object_release(dict);
+
+		uint32_t percent = ((double)total_charge / (double)total_capacity) * 100.0;
+
+		if (percent == 100) {
+			status = "full";
+		}
+
+		return {percent, -1, -1, status};
 	}
 
 	auto collect(bool no_update) -> cpu_info & {
@@ -390,55 +539,20 @@ namespace Cpu {
 			Logger::error("failed to get load averages");
 		}
 
-		//? Read total physical CPU count for sysctl iteration
-		//? (may differ from coreCount when SMT is disabled via hw.smt=0).
-		int ncpu_total = Shared::coreCount;
-		{
-			int mib[] = {CTL_HW, HW_NCPU};
-			size_t len = sizeof(ncpu_total);
-			sysctl(mib, 2, &ncpu_total, &len, nullptr, 0);
-		}
-
-		//? Re-query online CPU count in case it changed at runtime (e.g. hw.smt toggled).
-		{
-			int mib[] = {CTL_HW, HW_NCPUONLINE};
-			int ncpu_online = Shared::coreCount;
-			size_t len = sizeof(ncpu_online);
-			if (sysctl(mib, 2, &ncpu_online, &len, nullptr, 0) != -1 and ncpu_online != Shared::coreCount) {
-				Shared::coreCount = ncpu_online;
-				core_old_totals.resize(Shared::coreCount, 0);
-				core_old_idles.resize(Shared::coreCount, 0);
-				cpu.core_percent.resize(Shared::coreCount);
-				cpu.temp.resize(Shared::coreCount + 1);
-				Runner::coreNum_reset = true;
-			}
-		}
-
-		auto cp_time = std::unique_ptr<struct cpustats[]>{
-			new struct cpustats[ncpu_total]
-		};
-		size_t size = sizeof(struct cpustats);
-		static int cpustats_mib[] = {CTL_KERN, KERN_CPUSTATS, /*fillme*/0};
-		for (int i = 0; i < ncpu_total; i++) {
-			cpustats_mib[2] = i;
-			if (sysctl(cpustats_mib, 3, &cp_time[i], &size, NULL, 0) == -1) {
-				Logger::error("sysctl kern.cpustats failed");
-			}
+		vector<array<long, CPUSTATES>> cpu_time(Shared::coreCount);
+		size_t size = sizeof(long) * CPUSTATES * Shared::coreCount;
+		if (sysctlbyname("kern.cp_time", &cpu_time[0], &size, nullptr, 0) == -1) {
+			Logger::error("failed to get CPU time");
 		}
 		long long global_totals = 0;
 		long long global_idles = 0;
 		vector<long long> times_summed = {0, 0, 0, 0};
 
-		//? j iterates all physical CPUs; offline ones are skipped
-		//? i is the display slot index, incremented only for online CPUs
-		for (long i = 0, j = 0; j < ncpu_total; j++) {
-			if (!(cp_time[j].cs_flags & CPUSTATS_ONLINE))
-				continue;
-
+		for (long i = 0; i < Shared::coreCount; i++) {
 			vector<long long> times;
 			//? 0=user, 1=nice, 2=system, 3=idle
 			for (int x = 0; const unsigned int c_state : {CP_USER, CP_NICE, CP_SYS, CP_IDLE}) {
-				auto val = cp_time[j].cs_time[c_state];
+				auto val = cpu_time[i][c_state];
 				times.push_back(val);
 				times_summed.at(x++) += val;
 			}
@@ -453,6 +567,7 @@ namespace Cpu {
 				global_idles += idles;
 
 				//? Calculate cpu total for each core
+				if (i > Shared::coreCount) break;
 				const long long calc_totals = max(0ll, totals - core_old_totals.at(i));
 				const long long calc_idles = max(0ll, idles - core_old_idles.at(i));
 				core_old_totals.at(i) = totals;
@@ -463,11 +578,11 @@ namespace Cpu {
 				//? Reduce size if there are more values than needed for graph
 				if (cpu.core_percent.at(i).size() > 40) cpu.core_percent.at(i).pop_front();
 
-			} catch (const std::exception &e) {
+			} catch (const std::exception& e) {
 				Logger::error("Cpu::collect() : {}", e.what());
 				throw std::runtime_error(fmt::format("collect() : {}", e.what()));
 			}
-			i++;
+
 		}
 
 		const long long calc_totals = max(1ll, global_totals - cpu_old.at("totals"));
@@ -506,14 +621,12 @@ namespace Cpu {
 		if (Config::getB("show_battery") and has_battery)
 			current_bat = get_battery();
 
-		return cpu;
+		return current_cpu;
 	}
-}  // namespace Cpu
+} // namespace Cpu
 
 namespace Mem {
 	bool has_swap = false;
-	vector<string> fstab;
-	fs::file_time_type fstab_time;
 	int disk_ios = 0;
 	vector<string> last_found;
 
@@ -554,32 +667,34 @@ namespace Mem {
 		uint64_t total_bytes_write = 0;
 
 		int num_drives = 0;
-		int mib[2] = { CTL_HW, HW_DISKCOUNT };
+		int mib[3] = { CTL_HW, HW_IOSTATS, sizeof(struct io_sysctl)};
 
 		size_t size;
-		if (sysctl(mib, 2, &num_drives, &size, NULL, 0) >= 0) {
-			mib[0] = CTL_HW;
-			mib[1] = HW_DISKSTATS;
-			size = num_drives * sizeof(struct diskstats);
-			auto p = std::unique_ptr<struct diskstats[], void(*)(void*)> {
-				reinterpret_cast<struct diskstats*>(malloc(size)),
-				free
-			};
-			if (sysctl(mib, 2, p.get(), &size, NULL, 0) == -1) {
-				Logger::error("failed to get disk stats");
-				return;
-			}
-			for (int i = 0; i < num_drives; i++) {
-				for (auto& [ignored, disk] : disks) {
-					if (disk.dev.string().find(p[i].ds_name) != string::npos) {
-						string mountpoint = mapping.at(disk.dev);
-						total_bytes_read = p[i].ds_rbytes;
-						total_bytes_write = p[i].ds_wbytes;
-						assign_values(disk, total_bytes_read, total_bytes_write);
-					}
+		if (sysctl(mib, 3, NULL, &size, NULL, 0) == -1) {
+			Logger::error("sysctl hw.drivestats failed");
+			return;
+		}
+		num_drives = size / sizeof(struct io_sysctl);
+
+		auto drives = std::unique_ptr<struct io_sysctl[], void(*)(void*)> {
+			reinterpret_cast<struct io_sysctl*>(malloc(size)),
+			free
+		};
+
+		if (sysctl(mib, 3, drives.get(), &size, NULL, 0) == -1) {
+			Logger::error("sysctl hw.iostats failed");
+		}
+		for (int i = 0; i < num_drives; i++) {
+			for (auto& [ignored, disk] : disks) {
+				if (disk.dev.string().find(drives[i].name) != string::npos) {
+					string mountpoint = mapping.at(disk.dev);
+					total_bytes_read = drives[i].rbytes;
+					total_bytes_write = drives[i].wbytes;
+					assign_values(disk, total_bytes_read, total_bytes_write);
 				}
 			}
 		}
+
 	}
 
 	auto collect(bool no_update) -> mem_info & {
@@ -590,40 +705,32 @@ namespace Mem {
 		auto show_disks = Config::getB("show_disks");
 		auto swap_disk = Config::getB("swap_disk");
 		auto &mem = current_mem;
-		static bool snapped = (getenv("BTOP_SNAPPED") != nullptr);
+		static bool snapped = (getenv("HWLENS_SNAPPED") != nullptr);
 
-		u_int memActive, memWire, cachedMem;
-		// u_int freeMem;
+		uint64_t memActive, memWired, memCached, memFree;
 		size_t size;
-		static int uvmexp_mib[] = {CTL_VM, VM_UVMEXP};
-		static int bcstats_mib[] = {CTL_VFS, VFS_GENERIC, VFS_BCACHESTAT};
-		struct uvmexp uvmexp;
-		struct bcachestats bcstats;
+
+		static int uvmexp_mib[] = {CTL_VM, VM_UVMEXP2};
+		struct uvmexp_sysctl uvmexp;
 		size = sizeof(uvmexp);
 		if (sysctl(uvmexp_mib, 2, &uvmexp, &size, NULL, 0) == -1) {
-			Logger::error("sysctl failed");
+			Logger::error("uvmexp sysctl failed");
 			bzero(&uvmexp, sizeof(uvmexp));
 		}
-		size = sizeof(bcstats);
-		if (sysctl(bcstats_mib, 3, &bcstats, &size, NULL, 0) == -1) {
-			Logger::error("sysctl failed");
-			bzero(&bcstats, sizeof(bcstats));
-		}
+
 		memActive = uvmexp.active * Shared::pageSize;
-		memWire = uvmexp.wired;
-		// freeMem = uvmexp.free * Shared::pageSize;
-		cachedMem = bcstats.numbufpages * Shared::pageSize;
-		mem.stats.at("used") = memActive;
-		mem.stats.at("available") = Shared::totalMem - memActive - memWire;
-   		mem.stats.at("cached") = cachedMem;
-  		mem.stats.at("free") = Shared::totalMem - memActive - memWire;
+		memWired = uvmexp.wired * Shared::pageSize;
+		memFree = uvmexp.free * Shared::pageSize;
+		memCached = (uvmexp.filepages + uvmexp.execpages + uvmexp.anonpages) * Shared::pageSize;
+		mem.stats.at("used") = memActive + memWired;
+		mem.stats.at("available") = Shared::totalMem - (memActive + memWired);
+		mem.stats.at("cached") = memCached;
+		mem.stats.at("free") = memFree;
 
 		if (show_swap) {
-			int total = uvmexp.swpages * Shared::pageSize;
-			mem.stats.at("swap_total") = total;
-			int swapped = uvmexp.swpgonly * Shared::pageSize;
-			mem.stats.at("swap_used") = swapped;
-			mem.stats.at("swap_free") = total - swapped;
+			mem.stats.at("swap_total") = uvmexp.swpages * Shared::pageSize;
+			mem.stats.at("swap_used") = uvmexp.swpginuse * Shared::pageSize;
+			mem.stats.at("swap_free") = (uvmexp.swpages - uvmexp.swpginuse) * Shared::pageSize;
 		}
 
 		if (show_swap and mem.stats.at("swap_total") > 0) {
@@ -647,7 +754,7 @@ namespace Mem {
 			double uptime = system_uptime();
 			auto &disks_filter = Config::getS("disks_filter");
 			bool filter_exclude = false;
-			// auto only_physical = Config::getB("only_physical");
+			const auto only_physical = Config::getB("only_physical");
 			auto &disks = mem.disks;
 			vector<string> filter;
 			if (not disks_filter.empty()) {
@@ -658,22 +765,20 @@ namespace Mem {
 				}
 			}
 
-			struct statfs *stfs;
-			int count = getmntinfo(&stfs, MNT_WAIT);
+			struct statvfs *stvfs;
+			int count = getmntinfo(&stvfs, MNT_WAIT);
 			vector<string> found;
 			found.reserve(last_found.size());
 			for (int i = 0; i < count; i++) {
-				auto fstype = string(stfs[i].f_fstypename);
-				if (fstype == "autofs" || fstype == "devfs" || fstype == "linprocfs" || fstype == "procfs" || fstype == "tmpfs" || fstype == "linsysfs" ||
-					fstype == "fdesckfs") {
-					// in memory filesystems -> not useful to show
+				string_view fstype = stvfs[i].f_fstypename;
+				string_view dev = stvfs[i].f_mntfromname;
+				//? root_device: the kernel name for / until rc.d/root remounts it from fstab
+				if (only_physical and not dev.starts_with("/dev/") and dev != "root_device" and fstype != "zfs")
 					continue;
-				}
 
 				std::error_code ec;
-				string mountpoint = stfs[i].f_mntonname;
-				string dev = stfs[i].f_mntfromname;
-				mapping[dev] = mountpoint;
+				string mountpoint = stvfs[i].f_mntonname;
+				mapping[string(dev)] = mountpoint;
 
 				//? Match filter if not empty
 				if (not filter.empty()) {
@@ -697,8 +802,8 @@ namespace Mem {
 				if (not v_contains(last_found, mountpoint))
 					redraw = true;
 
-				disks.at(mountpoint).free = stfs[i].f_bfree;
-				disks.at(mountpoint).total = stfs[i].f_iosize;
+				disks.at(mountpoint).free = stvfs[i].f_bfree;
+				disks.at(mountpoint).total = stvfs[i].f_iosize;
 			}
 
 			//? Remove disks no longer mounted or filtered out
@@ -1000,8 +1105,8 @@ namespace Proc {
 	static std::unordered_set<size_t> dead_procs;
 
 	string get_status(char s) {
-		if (s & SRUN) return "Running";
-		if (s & SSLEEP) return "Sleeping";
+		if (s & LSRUN) return "Running";
+		if (s & LSSLEEP) return "Sleeping";
 		if (s & SIDL) return "Idle";
 		if (s & SSTOP) return "Stopped";
 		if (s & SZOMB) return "Zombie";
@@ -1093,10 +1198,10 @@ namespace Proc {
 			int count = 0;
 			char buf[_POSIX2_LINE_MAX];
 			Shared::KvmPtr kd {kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, buf)};
-			const struct kinfo_proc* kprocs = kvm_getprocs(kd.get() , KERN_PROC_ALL, 0, sizeof(struct kinfo_proc), &count);
+			const struct kinfo_proc2* kprocs = kvm_getproc2(kd.get(), KERN_PROC_ALL, 0, sizeof(struct kinfo_proc2), &count);
 
 			for (int i = 0; i < count; i++) {
-				const struct kinfo_proc* kproc = &kprocs[i];
+				const struct kinfo_proc2* kproc = &kprocs[i];
 				const size_t pid = (size_t)kproc->p_pid;
 				if (pid < 1) continue;
 				found.push_back(pid);
@@ -1125,7 +1230,7 @@ namespace Proc {
 						continue;
 					}
 					new_proc.name = kproc->p_comm;
-					char** argv = kvm_getargv(kd.get(), kproc, 0);
+					char** argv = kvm_getargv2(kd.get(), kproc, 0);
 					if (argv) {
 						for (int i = 0; argv[i] and cmp_less(new_proc.cmd.size(), 1000); i++) {
 							new_proc.cmd += argv[i] + " "s;
@@ -1212,13 +1317,18 @@ namespace Proc {
 			filter_found = 0;
 			for (auto& p : current_procs) {
 				if (not tree and not filter.empty()) {
-					if (!matches_filter(p, filter)) {
-						p.filtered = true;
-						filter_found++;
-					} else {
-						p.filtered = false;
+						if (not s_contains_ic(to_string(p.pid), filter)
+						and not s_contains_ic(p.name, filter)
+						and not s_contains_ic(p.cmd, filter)
+						and not s_contains_ic(p.user, filter)) {
+							p.filtered = true;
+							filter_found++;
+							}
+						else {
+							p.filtered = false;
+						}
 					}
-				} else {
+				else {
 					p.filtered = false;
 				}
 			}
@@ -1232,23 +1342,6 @@ namespace Proc {
 		//* Generate tree view if enabled
 		if (tree and (not no_update or should_filter or sorted_change)) {
 			bool locate_selection = false;
-
-			if (toggle_children != -1) {
-				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
-				if (collapser != current_procs.end()){
-					for (auto& p : current_procs) {
-						if (p.ppid == collapser->pid) {
-							auto child = rng::find(current_procs, p.pid, &proc_info::pid);
-							if (child != current_procs.end()){
-								child->collapsed = not child->collapsed;
-							}
-						}
-					}
-					if (Config::ints.at("proc_selected") > 0) locate_selection = true;
-				}
-				toggle_children = -1;
-			}
-
 			if (auto find_pid = (collapse != -1 ? collapse : expand); find_pid != -1) {
 				auto collapser = rng::find(current_procs, find_pid, &proc_info::pid);
 				if (collapser != current_procs.end()) {

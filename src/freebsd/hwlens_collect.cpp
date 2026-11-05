@@ -63,10 +63,10 @@ tab-size = 4
 
 #include <fmt/format.h>
 
-#include "../btop_config.hpp"
-#include "../btop_log.hpp"
-#include "../btop_shared.hpp"
-#include "../btop_tools.hpp"
+#include "../hwlens_config.hpp"
+#include "../hwlens_log.hpp"
+#include "../hwlens_shared.hpp"
+#include "../hwlens_tools.hpp"
 
 using std::clamp, std::string_literals::operator""s, std::cmp_equal, std::cmp_less, std::cmp_greater;
 using std::ifstream, std::numeric_limits, std::streamsize, std::round, std::max, std::min;
@@ -597,7 +597,7 @@ namespace Mem {
 		auto show_disks = Config::getB("show_disks");
 		auto swap_disk = Config::getB("swap_disk");
 		auto &mem = current_mem;
-		static bool snapped = (getenv("BTOP_SNAPPED") != nullptr);
+		static bool snapped = (getenv("HWLENS_SNAPPED") != nullptr);
 
 		int mib[4];
 		u_int memActive, memWire, cachedMem, freeMem;

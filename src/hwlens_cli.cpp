@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "btop_cli.hpp"
+#include "hwlens_cli.hpp"
 
 #include <algorithm>
 #include <expected>
@@ -18,8 +18,8 @@
 #include <fmt/base.h>
 #include <fmt/format.h>
 
-#include "btop_config.hpp"
-#include "btop_shared.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_shared.hpp"
 #include "config.h"
 
 using namespace std::string_view_literals;
@@ -35,9 +35,9 @@ static constexpr auto RESET = "\033[0m"sv;
 
 static void version() noexcept {
 	if constexpr (GIT_COMMIT.empty()) {
-		fmt::println("btop version: {}{}{}", BOLD, Global::Version, RESET);
+		fmt::println("hwlens version: {}{}{}", BOLD, Global::Version, RESET);
 	} else {
-		fmt::println("btop version: {}{}+{}{}", BOLD, Global::Version, GIT_COMMIT, RESET);
+		fmt::println("hwlens version: {}{}+{}{}", BOLD, Global::Version, GIT_COMMIT, RESET);
 	}
 }
 
@@ -243,7 +243,7 @@ namespace Cli {
 	}
 
 	void usage() noexcept {
-		fmt::println("{0}Usage:{1} {2}btop{1} [OPTIONS]\n", BOLD_UNDERLINE, RESET, BOLD);
+		fmt::println("{0}Usage:{1} {2}hwlens{1} [OPTIONS]\n", BOLD_UNDERLINE, RESET, BOLD);
 	}
 
 	void help() noexcept {

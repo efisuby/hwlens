@@ -16,14 +16,14 @@ indent = tab
 tab-size = 4
 */
 
-#include "btop_menu.hpp"
+#include "hwlens_menu.hpp"
 
-#include "btop_config.hpp"
-#include "btop_draw.hpp"
-#include "btop_log.hpp"
-#include "btop_shared.hpp"
-#include "btop_theme.hpp"
-#include "btop_tools.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_draw.hpp"
+#include "hwlens_log.hpp"
+#include "hwlens_shared.hpp"
+#include "hwlens_theme.hpp"
+#include "hwlens_tools.hpp"
 
 #include <errno.h>
 #include <signal.h>
@@ -217,7 +217,7 @@ namespace Menu {
 		{"Selected N", "Select new nice value for selected process."},
 		{"", " "},
 		{"", "For bug reporting and project updates, visit:"},
-		{"", "https://github.com/aristocratos/btop"},
+		{"", "https://github.com/efisuby/hwlens"},
 	};
 
 	const vector<vector<vector<string>>> categories = {
@@ -226,14 +226,14 @@ namespace Menu {
 				"Set color theme.",
 				"",
 				"Choose from all theme files in (usually)",
-				"\"/usr/[local/]share/btop/themes\" and",
-				"\"~/.config/btop/themes\".",
+				"\"/usr/[local/]share/hwlens/themes\" and",
+				"\"~/.config/hwlens/themes\".",
 				"",
 				"\"Default\" for builtin default theme.",
 				"\"TTY\" for builtin 16-color theme.",
 				"",
 				"For theme updates see:",
-				"https://github.com/aristocratos/btop"},
+				"https://github.com/efisuby/hwlens"},
 			{"theme_background",
 				"If the theme set background should be shown.",
 				"",

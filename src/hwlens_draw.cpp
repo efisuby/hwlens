@@ -28,14 +28,14 @@ tab-size = 4
 
 #include <fmt/format.h>
 
-#include "btop_config.hpp"
-#include "btop_draw.hpp"
-#include "btop_input.hpp"
-#include "btop_log.hpp"
-#include "btop_menu.hpp"
-#include "btop_shared.hpp"
-#include "btop_theme.hpp"
-#include "btop_tools.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_draw.hpp"
+#include "hwlens_input.hpp"
+#include "hwlens_log.hpp"
+#include "hwlens_menu.hpp"
+#include "hwlens_shared.hpp"
+#include "hwlens_theme.hpp"
+#include "hwlens_tools.hpp"
 
 using std::array;
 using std::clamp;
@@ -169,8 +169,10 @@ namespace Draw {
 				}
 				if (++z < Global::Banner_src.size()) banner += Mv::l(ulen(line[1])) + Mv::d(1);
 			}
-			banner += Mv::r(18 - Global::Version.size())
-					+ Theme::c("main_fg") + Fx::b + Fx::i + "v" + Global::Version + Fx::reset;
+			//? Version to the right of the last banner row, counted in the centred width
+			const size_t last_w = ulen(Global::Banner_src.back()[1]);
+			width = std::max(width, last_w + 2 + Global::Version.size());
+			banner += Mv::r(1) + Theme::c("main_fg") + Fx::b + Fx::i + "v" + Global::Version + Fx::reset;
 		}
 		if (redraw) return "";
 		return (centered ? Mv::to(y, Term::width / 2 - width / 2) : Mv::to(y, x)) + banner;

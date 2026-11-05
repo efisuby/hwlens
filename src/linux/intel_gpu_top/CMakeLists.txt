@@ -7,7 +7,7 @@ add_library(igt OBJECT
   intel_name_lookup_shim.c
 )
 
-if(BTOP_LTO)
+if(HWLENS_LTO)
   # We have checked LTO support already and it's supported :)
   set_target_properties(igt PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
@@ -15,5 +15,5 @@ endif()
 # Disable all warnings
 target_compile_options(igt PRIVATE -w)
 
-# Link igt into btop
-target_link_libraries(libbtop $<TARGET_OBJECTS:igt>)
+# Link igt into hwlens
+target_link_libraries(libhwlens $<TARGET_OBJECTS:igt>)

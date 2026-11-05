@@ -51,10 +51,10 @@ tab-size = 4
 	#include <pwd.h>
 #endif
 
-#include "../btop_config.hpp"
-#include "../btop_log.hpp"
-#include "../btop_shared.hpp"
-#include "../btop_tools.hpp"
+#include "../hwlens_config.hpp"
+#include "../hwlens_log.hpp"
+#include "../hwlens_shared.hpp"
+#include "../hwlens_tools.hpp"
 
 #if defined(GPU_SUPPORT)
 	// Redefining C++ keywords fortunately has a warning in clang, however it's unavoidable here
@@ -2339,7 +2339,7 @@ namespace Gpu {
 				}
 
 				//? Skip cards with no readable signals — virtual GPUs, fresh-bound devices,
-				//? or driver states where nothing useful is exposed yet. Otherwise btop would
+				//? or driver states where nothing useful is exposed yet. Otherwise hwlens would
 				//? render an empty GPU entry every tick.
 				if (not (d.has_busy or d.has_vram or d.has_temp or d.has_freq or not d.power.empty())) {
 					Logger::debug("amdgpu sysfs: skipping {} — no readable metrics", device_link.string());

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "btop_shared.hpp"
+#include "hwlens_shared.hpp"
 
 #include <gtest/gtest.h>
 

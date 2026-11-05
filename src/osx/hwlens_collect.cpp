@@ -66,10 +66,10 @@ tab-size = 4
 
 #include <fmt/format.h>
 
-#include "../btop_config.hpp"
-#include "../btop_log.hpp"
-#include "../btop_shared.hpp"
-#include "../btop_tools.hpp"
+#include "../hwlens_config.hpp"
+#include "../hwlens_log.hpp"
+#include "../hwlens_shared.hpp"
+#include "../hwlens_tools.hpp"
 
 #if defined(GPU_SUPPORT) && defined(__APPLE__) && defined(__arm64__)
 #include <dlfcn.h>
@@ -1238,7 +1238,7 @@ namespace Mem {
 		auto show_disks = Config::getB("show_disks");
 		auto swap_disk = Config::getB("swap_disk");
 		auto &mem = current_mem;
-		static bool snapped = (getenv("BTOP_SNAPPED") != nullptr);
+		static bool snapped = (getenv("HWLENS_SNAPPED") != nullptr);
 
 		vm_statistics64 p;
 		mach_msg_type_number_t info_size = HOST_VM_INFO64_COUNT;

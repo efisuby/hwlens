@@ -28,7 +28,7 @@ tab-size = 4
 using std::string;
 using std::vector;
 
-//* Functions and variables for reading and writing the btop config file
+//* Functions and variables for reading and writing the hwlens config file
 namespace Config {
 
 	extern std::filesystem::path conf_dir;
@@ -64,6 +64,9 @@ namespace Config {
 	constexpr int ONE_DAY_MILLIS = 1000 * 60 * 60 * 24;
 
 	[[nodiscard]] std::optional<std::filesystem::path> get_config_dir() noexcept;
+
+	//* Legacy btop config dir imported on this start by get_config_dir(), empty if none
+	extern std::filesystem::path migrated_from;
 
 	//* Check if string only contains space separated valid names for boxes and set current_boxes
 	bool set_boxes(const string& boxes);

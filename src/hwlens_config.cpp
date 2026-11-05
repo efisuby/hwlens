@@ -20,6 +20,7 @@ tab-size = 4
 #include <atomic>
 #include <filesystem>
 #include <fmt/format.h>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <locale>
@@ -32,10 +33,10 @@ tab-size = 4
 #include <fmt/core.h>
 #include <sys/statvfs.h>
 
-#include "btop_config.hpp"
-#include "btop_log.hpp"
-#include "btop_shared.hpp"
-#include "btop_tools.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_log.hpp"
+#include "hwlens_shared.hpp"
+#include "hwlens_tools.hpp"
 
 using std::array;
 using std::atomic;
@@ -65,7 +66,7 @@ const vector<string> Config::show_gpu_values = { "Auto", "On", "Off" };
 const vector<string> Config::base_10_bitrate_values = { "Auto", "True", "False" };
 const vector<string> Config::disable_preset_options = { "Off", "Default", "Custom", "All" };
 
-//* Functions and variables for reading and writing the btop config file
+//* Functions and variables for reading and writing the hwlens config file
 namespace Config {
 
 	atomic<bool> locked (false);
@@ -74,7 +75,7 @@ namespace Config {
 
 	const vector<array<string, 2>> descriptions = {
 		{"color_theme", 		"#* Name of a btop++/bpytop/bashtop formatted \".theme\" file, \"Default\" and \"TTY\" for builtin themes.\n"
-								"#* Themes should be placed in \"../share/btop/themes\" relative to binary or \"$HOME/.config/btop/themes\""},
+								"#* Themes should be placed in \"../share/hwlens/themes\" relative to binary or \"$HOME/.config/hwlens/themes\""},
 
 		{"theme_background", 	"#* If the theme set background should be shown, set to False if you want terminal background transparency."},
 
@@ -256,7 +257,7 @@ namespace Config {
 
 		{"show_battery_watts",	"#* Show power stats of battery next to charge indicator."},
 
-		{"log_level", 			"#* Set loglevel for \"~/.local/state/btop.log\" levels are: \"ERROR\" \"WARNING\" \"INFO\" \"DEBUG\".\n"
+		{"log_level", 			"#* Set loglevel for \"~/.local/state/hwlens.log\" levels are: \"ERROR\" \"WARNING\" \"INFO\" \"DEBUG\".\n"
 								"#* The level set includes all lower levels, i.e. \"DEBUG\" will show all logging info."},
 		{"save_config_on_exit",  "#* Automatically save current settings to config file on exit."},
 	#ifdef GPU_SUPPORT
@@ -407,6 +408,34 @@ namespace Config {
 	};
 	std::unordered_map<std::string_view, int> intsTmp;
 
+	fs::path migrated_from;
+
+	//? One-time import of the btop settings and themes this project was forked from.
+	//? Runs only while the hwlens config dir does not exist yet; the btop dir is never modified.
+	static void migrate_legacy_config(const fs::path& config_dir) noexcept {
+		std::error_code error;
+		if (config_dir.empty() or fs::exists(config_dir, error)) return;
+		const fs::path legacy_dir = config_dir.parent_path() / "btop";
+		const fs::path legacy_conf = legacy_dir / "btop.conf";
+		if (not fs::is_regular_file(legacy_conf, error)) return;
+
+		std::ifstream in(legacy_conf);
+		if (not in.good() or not fs::create_directories(config_dir, error)) return;
+		std::ofstream out(config_dir / "hwlens.conf");
+		//? Point theme paths at the hwlens locations, the btop ones may be uninstalled
+		for (string line; std::getline(in, line);) {
+			for (const auto& [from, to] : {std::pair{"/share/btop/themes/", "/share/hwlens/themes/"},
+										   std::pair{"/.config/btop/themes/", "/.config/hwlens/themes/"}}) {
+				if (const auto pos = line.find(from); pos != string::npos) line.replace(pos, strlen(from), to);
+			}
+			out << line << '\n';
+		}
+		if (not out.good()) return;
+		if (fs::is_directory(legacy_dir / "themes", error))
+			fs::copy(legacy_dir / "themes", config_dir / "themes", fs::copy_options::recursive, error);
+		migrated_from = legacy_dir;
+	}
+
 	// Returns a valid config dir or an empty optional
 	// The config dir might be read only, a warning is printed, but a path is returned anyway
 	[[nodiscard]] std::optional<fs::path> get_config_dir() noexcept {
@@ -415,12 +444,12 @@ namespace Config {
 			std::error_code error;
 			if (const auto xdg_config_home = std::getenv("XDG_CONFIG_HOME"); xdg_config_home != nullptr) {
 				if (fs::exists(xdg_config_home, error)) {
-					config_dir = fs::path(xdg_config_home) / "btop";
+					config_dir = fs::path(xdg_config_home) / "hwlens";
 				}
 			} else if (const auto home = std::getenv("HOME"); home != nullptr) {
 				error.clear();
 				if (fs::exists(home, error)) {
-					config_dir = fs::path(home) / ".config" / "btop";
+					config_dir = fs::path(home) / ".config" / "hwlens";
 				}
 				if (error) {
 					fmt::print(stderr, "\033[0;31mWarning: \033[0m{} could not be accessed: {}\n", config_dir.string(), error.message());
@@ -428,6 +457,8 @@ namespace Config {
 				}
 			}
 		}
+
+		migrate_legacy_config(config_dir);
 
 		// FIXME: This warnings can be noisy if the user deliberately has a non-writable config dir
 		//  offer an alternative | disable messages by default | disable messages if config dir is not writable | disable messages with a flag
@@ -880,12 +911,12 @@ namespace Config {
 	}
 
 	auto get_log_file() -> std::optional<fs::path> {
-		return get_xdg_state_dir().transform([](auto&& state_home) -> auto { return state_home / "btop.log"; });
+		return get_xdg_state_dir().transform([](auto&& state_home) -> auto { return state_home / "hwlens.log"; });
 	}
 
 	auto current_config() -> std::string {
 		auto buffer = std::string {};
-		fmt::format_to(std::back_inserter(buffer), "#? Config file for btop v.{}\n", Global::Version);
+		fmt::format_to(std::back_inserter(buffer), "#? Config file for hwlens v.{}\n", Global::Version);
 
 		for (const auto& [name, description] : descriptions) {
 			// Write a description comment if available.

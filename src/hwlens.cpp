@@ -16,7 +16,7 @@ indent = tab
 tab-size = 4
 */
 
-#include "btop.hpp"
+#include "hwlens.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -60,15 +60,16 @@ tab-size = 4
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 
-#include "btop_cli.hpp"
-#include "btop_config.hpp"
-#include "btop_draw.hpp"
-#include "btop_input.hpp"
-#include "btop_log.hpp"
-#include "btop_menu.hpp"
-#include "btop_shared.hpp"
-#include "btop_theme.hpp"
-#include "btop_tools.hpp"
+#include "config.h"
+#include "hwlens_cli.hpp"
+#include "hwlens_config.hpp"
+#include "hwlens_draw.hpp"
+#include "hwlens_input.hpp"
+#include "hwlens_log.hpp"
+#include "hwlens_menu.hpp"
+#include "hwlens_shared.hpp"
+#include "hwlens_theme.hpp"
+#include "hwlens_tools.hpp"
 
 using std::atomic;
 using std::cout;
@@ -87,14 +88,14 @@ using namespace std::literals;
 
 namespace Global {
 	const vector<array<string, 2>> Banner_src = {
-		{"#E62525", "██████╗ ████████╗ ██████╗ ██████╗"},
-		{"#CD2121", "██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗   ██╗    ██╗"},
-		{"#B31D1D", "██████╔╝   ██║   ██║   ██║██████╔╝ ██████╗██████╗"},
-		{"#9A1919", "██╔══██╗   ██║   ██║   ██║██╔═══╝  ╚═██╔═╝╚═██╔═╝"},
-		{"#801414", "██████╔╝   ██║   ╚██████╔╝██║        ╚═╝    ╚═╝"},
-		{"#000000", "╚═════╝    ╚═╝    ╚═════╝ ╚═╝"},
+		{"#2EC4B6", "██╗  ██╗ ██╗    ██╗ ██╗      ███████╗ ███╗   ██╗ ███████╗"},
+		{"#28AFA2", "██║  ██║ ██║    ██║ ██║      ██╔════╝ ████╗  ██║ ██╔════╝"},
+		{"#22998E", "███████║ ██║ █╗ ██║ ██║      █████╗   ██╔██╗ ██║ ███████╗"},
+		{"#1C847A", "██╔══██║ ██║███╗██║ ██║      ██╔══╝   ██║╚██╗██║ ╚════██║"},
+		{"#166E66", "██║  ██║ ╚███╔███╔╝ ███████╗ ███████╗ ██║ ╚████║ ███████║"},
+		{"#000000", "╚═╝  ╚═╝  ╚══╝╚══╝  ╚══════╝ ╚══════╝ ╚═╝  ╚═══╝ ╚══════╝"},
 	};
-	const string Version = "1.4.8";
+	const string Version{HWLENS_VERSION};
 
 	int coreCount;
 	string overlay;
@@ -825,7 +826,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 
 
 //* --------------------------------------------- Main starts here! ---------------------------------------------------
-[[nodiscard]] auto btop_main(const std::span<const std::string_view> args) -> int {
+[[nodiscard]] auto hwlens_main(const std::span<const std::string_view> args) -> int {
 
 	//? ------------------------------------------------ INIT ---------------------------------------------------------
 
@@ -837,7 +838,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	if (Global::real_uid != Global::set_uid) {
 		if (seteuid(Global::real_uid) != 0) {
 			Global::real_uid = Global::set_uid;
-			Global::exit_error_msg = "Failed to change effective user ID. Unset btop SUID bit to ensure security on this system. Quitting!";
+			Global::exit_error_msg = "Failed to change effective user ID. Unset hwlens SUID bit to ensure security on this system. Quitting!";
 			clean_quit(1);
 		}
 	}
@@ -867,12 +868,14 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 			Config::conf_file = cli.config_file.value();
 		} else if (config_dir.has_value()) {
 			Config::conf_dir = config_dir.value();
-			Config::conf_file = Config::conf_dir / "btop.conf";
+			Config::conf_file = Config::conf_dir / "hwlens.conf";
 
 			auto log_file = Config::get_log_file();
 			if (log_file.has_value()) {
 				Logger::init(log_file.value());
 			}
+			if (not Config::migrated_from.empty())
+				Logger::info("Imported settings and themes from {}", Config::migrated_from.string());
 
 			Theme::user_theme_dir = Config::conf_dir / "themes";
 
@@ -885,7 +888,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 		}
 	}
 
-	//? Try to find global btop theme path relative to binary path
+	//? Try to find global hwlens theme path relative to binary path
 #ifdef __linux__
 	{ 	std::error_code ec;
 		Global::self_path = fs::read_symlink("/proc/self/exe", ec).remove_filename();
@@ -912,12 +915,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 #endif
 	if (std::error_code ec; not Global::self_path.empty()) {
-		Theme::theme_dir = fs::canonical(Global::self_path / "../share/btop/themes", ec);
+		Theme::theme_dir = fs::canonical(Global::self_path / "../share/hwlens/themes", ec);
 		if (ec or not fs::is_directory(Theme::theme_dir) or access(Theme::theme_dir.c_str(), R_OK) == -1) Theme::theme_dir.clear();
 	}
 	//? If relative path failed, check two most common absolute paths
 	if (Theme::theme_dir.empty()) {
-		for (auto theme_path : {"/usr/local/share/btop/themes", "/usr/share/btop/themes"}) {
+		for (auto theme_path : {"/usr/local/share/hwlens/themes", "/usr/share/hwlens/themes"}) {
 			if (fs::is_directory(fs::path(theme_path)) and access(theme_path, R_OK) != -1) {
 				Theme::theme_dir = fs::path(theme_path);
 				break;
@@ -1004,7 +1007,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 
 	//? Initialize terminal and set options
 	if (not Term::init()) {
-		Global::exit_error_msg = "No tty detected!\nbtop++ needs an interactive shell to run.";
+		Global::exit_error_msg = "No tty detected!\nhwlens needs an interactive shell to run.";
 		clean_quit(1);
 	}
 
