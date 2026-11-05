@@ -1,0 +1,14 @@
+[Unit]
+Description=hwlens system monitor daemon socket
+Documentation=https://github.com/efisuby/hwlens/blob/main/docs/protocol.md
+
+[Socket]
+ListenStream=/run/hwlensd/hwlensd.sock
+SocketUser=root
+SocketGroup=hwlens
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

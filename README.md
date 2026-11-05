@@ -7,6 +7,10 @@
 A terminal system monitor that focuses on hardware. It shows CPU, fans, GPU,
 disks, network and processes on one screen.
 
+hwlens has two parts: `hwlensd`, a system service that collects the data, and
+the `hwlens` terminal UI, which shows it. The UI has no privileges and reads no
+`/proc` or `/sys` files itself.
+
 ## Features
 
 * **CPU**:
@@ -26,8 +30,22 @@ disks, network and processes on one screen.
   * optional per-process VRAM and systemd unit columns.
 * Themes, mouse support and a full in-app options menu.
 
-Planned: `hwlensd`, a system daemon that collects the data once and serves it
-over a local socket. The TUI and a desktop widget can then share the same data.
+## How it works
+
+```
+ hwlensd (root, limited capabilities)  ──  /run/hwlensd/hwlensd.sock (0660, group hwlens)  ──  hwlens (your user)
+```
+
+* `hwlensd` collects once per tick and sends every client a delta of its state
+  as JSON lines ([protocol](docs/protocol.md), [design](docs/daemon.md)).
+* All clients share one collection. Settings that affect collection (sensors,
+  disks, update interval, ...) are sent by the UI and apply to every client.
+* Signals and nice values go through the daemon. A user may act only on their
+  own processes, and only root may lower a nice value. Every action is logged.
+* The service runs with `CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_PERFMON
+  CAP_KILL CAP_SYS_NICE` only, so CPU power (RAPL) and other users' process
+  details work while the UI stays unprivileged.
+* A planned desktop widget will read the same socket.
 
 ## Build
 
@@ -38,7 +56,14 @@ Requirements: Linux, CMake 3.25+, GCC 14 (or Clang 19+) and nlohmann-json 3.11+
 CXX=g++-14 CC=gcc-14 cmake -B build -DCMAKE_BUILD_TYPE=Release -DHWLENS_GPU=ON
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
-./build/hwlens
+```
+
+To try a build without installing it, start a daemon on your own socket. As a
+normal user it sees less, for example no CPU power:
+
+```sh
+./build/hwlensd --socket /tmp/hwlensd.sock &
+./build/hwlens --socket /tmp/hwlensd.sock
 ```
 
 Useful CMake options:
@@ -58,11 +83,22 @@ packaging/build-deb.sh
 sudo apt-get install ./dist/hwlens_*.deb
 ```
 
-The package grants `cap_perfmon,cap_dac_read_search` to `/usr/bin/hwlens`.
-With these, CPU power (RAPL) and other users' process details work without
-root.
+The package installs `hwlensd.service` and `hwlensd.socket`, enables the
+socket, and creates the `hwlens` group. The user who ran `sudo apt-get install`
+is added to the group; log in again (or run `newgrp hwlens`) before the first
+start. Add other users with `sudo usermod -aG hwlens USER`.
 
-Without a package: `sudo cmake --install build`.
+Without a package:
+
+```sh
+sudo cmake --install build
+sudo systemd-sysusers hwlens.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now hwlensd.socket
+```
+
+If hwlens says that hwlensd is not running, check
+`systemctl status hwlensd.socket hwlensd.service` and `journalctl -u hwlensd`.
 
 ## Configuration
 
@@ -71,6 +107,9 @@ options menu (`o`). User themes go in `~/.config/hwlens/themes/`.
 
 If `~/.config/btop/btop.conf` exists on the first start, hwlens imports it
 together with your btop themes. The btop files are left unchanged.
+
+The daemon reads `/etc/hwlens/hwlensd.conf` (update interval and log level).
+`hwlens --socket PATH` or `HWLENSD_SOCKET` select another socket.
 
 ## Origin
 

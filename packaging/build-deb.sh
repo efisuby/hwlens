@@ -21,21 +21,23 @@ rm -rf "$BUILD"
 cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DHWLENS_GPU=ON
 cmake --build "$BUILD" -j"$(nproc)"
 DESTDIR="$STAGE" cmake --install "$BUILD"
+# The packaged permissions are the installed ones, whatever the umask of the build was
+find "$STAGE" -type d -exec chmod 0755 {} +
 
 # Runtime dependencies from the linked shared libraries
 mkdir -p "$BUILD/shlib/debian"
 echo "Source: hwlens" > "$BUILD/shlib/debian/control"
-depends=$(cd "$BUILD/shlib" && dpkg-shlibdeps -O -e"$STAGE/usr/bin/hwlens" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+depends=$(cd "$BUILD/shlib" && dpkg-shlibdeps -O -e"$STAGE/usr/bin/hwlens" -e"$STAGE/usr/bin/hwlensd" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
 
-installed_size=$(du -sk "$STAGE/usr" | cut -f1)
+installed_size=$(du -sk "$STAGE" | cut -f1)
 mkdir -p "$STAGE/DEBIAN"
-cat > "$STAGE/DEBIAN/control" <<EOF
+cat > "$STAGE/DEBIAN/control" <<CONTROL
 Package: hwlens
 Version: $version
 Architecture: $arch
 Maintainer: efisuby <efisuby@users.noreply.github.com>
 Installed-Size: $installed_size
-Depends: $depends
+Depends: $depends, systemd
 Section: utils
 Priority: optional
 Homepage: https://github.com/efisuby/hwlens
@@ -43,18 +45,50 @@ Description: Terminal system monitor focused on hardware
  Shows CPU (P/E clusters, RAPL power, PSI), fan speeds and PWM, GPU
  clocks and throttle reasons, disk IO and NVMe temperatures, network
  and processes with per-process VRAM and systemd unit columns.
-EOF
+ .
+ The hwlensd system service collects the data; the hwlens terminal UI
+ reads it from /run/hwlensd/hwlensd.sock. Members of the hwlens group
+ may connect.
+CONTROL
 
-# RAPL energy_uj (CPU watts) and other processes' /proc files are root-only:
-# grant the capabilities needed to read them on install.
+echo /etc/hwlens/hwlensd.conf > "$STAGE/DEBIAN/conffiles"
+
 cat > "$STAGE/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
-if [ "$1" = configure ] && command -v setcap >/dev/null 2>&1; then
-	setcap "cap_perfmon,cap_dac_read_search=+ep" /usr/bin/hwlens || echo "hwlens: setcap failed, CPU watts will be unavailable" >&2
+if [ "$1" = configure ]; then
+	systemd-sysusers hwlens.conf 2>/dev/null || getent group hwlens >/dev/null || addgroup --system hwlens
+	# The user who ran "sudo apt install" gets access to the daemon; other users are added by hand
+	if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1 \
+		&& ! id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx hwlens; then
+		usermod -aG hwlens "$SUDO_USER"
+		echo "hwlens: added $SUDO_USER to the hwlens group; log in again (or run 'newgrp hwlens') to use hwlens"
+	fi
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload
+		systemctl enable --now hwlensd.socket
+		# On upgrade the running daemon is the old binary
+		systemctl try-restart hwlensd.service
+	fi
 fi
 POSTINST
-chmod 0755 "$STAGE/DEBIAN/postinst"
+
+cat > "$STAGE/DEBIAN/prerm" <<'PRERM'
+#!/bin/sh
+set -e
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	systemctl disable --now hwlensd.socket hwlensd.service || true
+fi
+PRERM
+
+cat > "$STAGE/DEBIAN/postrm" <<'POSTRM'
+#!/bin/sh
+set -e
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload || true
+fi
+POSTRM
+chmod 0755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm" "$STAGE/DEBIAN/postrm"
 
 mkdir -p "$DIST"
 dpkg-deb --build --root-owner-group "$STAGE" "$DIST/hwlens_${version}_${arch}.deb"

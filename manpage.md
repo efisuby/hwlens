@@ -8,13 +8,16 @@ hwlens - Terminal system monitor for processor, GPU, memory, disks, network, sen
 
 # SYNOPSIS
 
-**hwlens** [**-c** _file_] [**-d**] [**-f** _filter_] [**-l**] [**-p** _id_] [**-t**] [**-u** _ms_] [**\-\-force-utf**] [**\-\-themes-dir** _dir_]
+**hwlens** [**-c** _file_] [**-d**] [**-f** _filter_] [**-l**] [**-p** _id_] [**-t**] [**-u** _ms_] [**\-\-force-utf**] [**\-\-socket** _path_] [**\-\-themes-dir** _dir_]
 
 **hwlens** [**\-\-default-config** | {**-h** | **\-\-help**} | {**-V** | **\-\-version**}]
 
 # DESCRIPTION
 
 **hwlens** is a program that shows usage and stats for processor, memory, disks, network, and processes.
+
+The data comes from **hwlensd**, a system service that hwlens connects to through
+_/run/hwlensd/hwlensd.sock_. Members of the **hwlens** group may connect.
 
 # OPTIONS
 
@@ -45,6 +48,9 @@ starting with two dashes ('-'). A summary of options is included below.
 **\-\-no-tty**
 :   Force disable tty mode.
 
+**\-\-socket _path_**
+:   Socket of hwlensd. The default is _/run/hwlensd/hwlensd.sock_, or **HWLENSD_SOCKET** when set.
+
 **\-\-themes-dir _dir_**
 :   Path to a custom themes directory. When specified, this directory takes priority over the default theme search paths.
 
@@ -62,11 +68,11 @@ starting with two dashes ('-'). A summary of options is included below.
 
 # BUGS
 
-The upstream bug tracker can be found at https://github.com/aristocratos/hwlens/issues.
+The upstream bug tracker can be found at https://github.com/efisuby/hwlens/issues.
 
 # SEE ALSO
 
-**top**(1), **htop**(1)
+**top**(1), **htop**(1), **systemctl**(1)
 
 # AUTHOR
 

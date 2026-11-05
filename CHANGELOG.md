@@ -17,7 +17,18 @@ First release under the hwlens name, forked from btop++ v1.4.8.
   labels instead of arrows.
 - Processes: per-process GPU memory (`VRAM`) and systemd unit (`Unit:`)
   columns.
-- Packaging: `packaging/build-deb.sh` builds a local Ubuntu .deb.
+- hwlensd: a system service collects the data and the TUI is its client.
+  The service runs as root with five capabilities; the UI has none and no
+  longer needs `setcap`. Clients connect to `/run/hwlensd/hwlensd.sock`
+  (group `hwlens`) and get a full snapshot, then a delta per tick
+  (`docs/protocol.md`). Signals and nice values go through the daemon, which
+  applies the kernel's rules for the client's uid and logs every action.
+  `hwlensd --dump-json` prints one snapshot.
+- Linux only: the macOS, FreeBSD, NetBSD and OpenBSD collectors are removed.
+- Processes: the parent pid is read on every collection, so reparented
+  processes stay in the right place of the tree.
+- Packaging: `packaging/build-deb.sh` builds a local Ubuntu .deb with both
+  programs, the systemd units and the `hwlens` group.
 
 # btop++ history (upstream)
 

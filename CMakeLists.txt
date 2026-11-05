@@ -233,6 +233,14 @@ install(FILES "hwlens.desktop" DESTINATION "share/applications")
 install(FILES "Img/icon.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME "hwlens.svg")
 install(DIRECTORY "themes" DESTINATION "share/hwlens")
 
+# hwlensd: systemd units, the hwlens group and the default settings
+include(GNUInstallDirs)
+configure_file(packaging/systemd/hwlensd.service.in hwlensd.service @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/hwlensd.service" "packaging/systemd/hwlensd.socket"
+  DESTINATION "lib/systemd/system")
+install(FILES "packaging/systemd/hwlens.sysusers" DESTINATION "lib/sysusers.d" RENAME "hwlens.conf")
+install(FILES "packaging/hwlensd.conf" DESTINATION "${CMAKE_INSTALL_FULL_SYSCONFDIR}/hwlens")
+
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests)

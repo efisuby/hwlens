@@ -1,0 +1,35 @@
+[Unit]
+Description=hwlens system monitor daemon
+Documentation=https://github.com/efisuby/hwlens/blob/main/docs/daemon.md
+Requires=hwlensd.socket
+After=hwlensd.socket
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/hwlensd --log-level INFO
+Restart=on-failure
+
+# Root, but only with the capabilities the collectors and the process actions need:
+#   DAC_READ_SEARCH  RAPL energy_uj, sensors and disks that are readable by root only
+#   SYS_PTRACE       /proc/<pid>/io, smaps and cmdline of other users' processes
+#   PERFMON          Intel GPU engine counters
+#   KILL, SYS_NICE   signals and nice values requested by clients (checked per client uid)
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_PERFMON CAP_KILL CAP_SYS_NICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+# read-only instead of yes: statvfs() of a separate /home must see the real file system
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+
+[Install]
+Also=hwlensd.socket
