@@ -95,6 +95,16 @@ namespace Shared {
 
 	extern long coreCount, page_size, clk_tck;
 
+	//* Samples kept for each graph history, independent of the terminal size.
+	//* 600 samples cover a 300 column graph (2 samples per braille cell) or 10 minutes at 1s updates.
+	constexpr size_t history_size = 600;
+
+	//* Drop the oldest samples so that <history> holds at most <limit> values
+	template <typename T>
+	inline void trim_history(std::deque<T>& history, size_t limit = history_size) {
+		while (history.size() > limit) history.pop_front();
+	}
+
 }
 
 #if defined(GPU_SUPPORT)

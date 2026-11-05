@@ -746,7 +746,7 @@ namespace Cpu {
 		found_sensors.at(cpu_sensor).temp = stol(readfile(found_sensors.at(cpu_sensor).path, "0")) / 1000;
 		current_cpu.temp.at(0).push_back(found_sensors.at(cpu_sensor).temp);
 		current_cpu.temp_max = found_sensors.at(cpu_sensor).crit;
-		if (current_cpu.temp.at(0).size() > 20) current_cpu.temp.at(0).pop_front();
+		Shared::trim_history(current_cpu.temp.at(0), 20);
 
 		if (Config::getB("show_coretemp") and not cpu_temp_only) {
 			for (vector<string_view> done; const auto& sensor : core_sensors) {
@@ -757,7 +757,7 @@ namespace Cpu {
 			for (const auto& [core, temp] : core_mapping) {
 				if (cmp_less(core + 1, current_cpu.temp.size()) and cmp_less(temp, core_sensors.size())) {
 					current_cpu.temp.at(core + 1).push_back(found_sensors.at(core_sensors.at(temp)).temp);
-					if (current_cpu.temp.at(core + 1).size() > 20) current_cpu.temp.at(core + 1).pop_front();
+					Shared::trim_history(current_cpu.temp.at(core + 1), 20);
 				}
 			}
 		}
@@ -1294,7 +1294,7 @@ namespace Cpu {
 								cpu.core_percent.emplace_back();
 							}
 							cpu.core_percent[i-1].push_back(0);
-							if (cpu.core_percent.at(i-1).size() > 40) cpu.core_percent.at(i-1).pop_front();
+							Shared::trim_history(cpu.core_percent.at(i-1), 40);
 							i++;
 						}
 					}
@@ -1326,7 +1326,7 @@ namespace Cpu {
 						cpu.cpu_percent.at("total").push_back(clamp((long long)round((double)(calc_totals - calc_idles) * 100 / calc_totals), 0ll, 100ll));
 
 						//? Reduce size if there are more values than needed for graph
-						while (cmp_greater(cpu.cpu_percent.at("total").size(), width * 2)) cpu.cpu_percent.at("total").pop_front();
+						Shared::trim_history(cpu.cpu_percent.at("total"));
 
 						//? Populate cpu.cpu_percent with all fields from stat
 						for (int ii = 0; const auto& val : times) {
@@ -1334,7 +1334,7 @@ namespace Cpu {
 							cpu_old.at(time_names.at(ii)) = val;
 
 							//? Reduce size if there are more values than needed for graph
-							while (cmp_greater(cpu.cpu_percent.at(time_names.at(ii)).size(), width * 2)) cpu.cpu_percent.at(time_names.at(ii)).pop_front();
+							Shared::trim_history(cpu.cpu_percent.at(time_names.at(ii)));
 
 							if (++ii == 10) break;
 						}
@@ -1358,7 +1358,7 @@ namespace Cpu {
 				}
 
 				//? Reduce size if there are more values than needed for graph
-				if (cpu.core_percent.at(i-1).size() > 40) cpu.core_percent.at(i-1).pop_front();
+				Shared::trim_history(cpu.core_percent.at(i-1), 40);
 			}
 
 			//? Notify main thread to redraw screen if we found more cores than previously detected
@@ -2468,18 +2468,16 @@ namespace Gpu {
 			if (gpu.supported_functions.pwr_usage)
 				pwr_total += gpu.pwr_usage;
 
-			//* Trim vectors if there are more values than needed for graphs
-			if (width != 0) {
-				//? GPU & memory utilization
-				while (cmp_greater(gpu.gpu_percent.at("gpu-totals").size(), width * 2)) gpu.gpu_percent.at("gpu-totals").pop_front();
-				while (cmp_greater(gpu.mem_utilization_percent.size(), width)) gpu.mem_utilization_percent.pop_front();
-				//? Power usage
-				while (cmp_greater(gpu.gpu_percent.at("gpu-pwr-totals").size(), width)) gpu.gpu_percent.at("gpu-pwr-totals").pop_front();
-				//? Temperature
-				while (cmp_greater(gpu.temp.size(), 18)) gpu.temp.pop_front();
-				//? Memory usage
-				while (cmp_greater(gpu.gpu_percent.at("gpu-vram-totals").size(), width/2)) gpu.gpu_percent.at("gpu-vram-totals").pop_front();
-			}
+			//* Trim histories to the fixed graph history length
+			//? GPU & memory utilization
+			Shared::trim_history(gpu.gpu_percent.at("gpu-totals"));
+			Shared::trim_history(gpu.mem_utilization_percent);
+			//? Power usage
+			Shared::trim_history(gpu.gpu_percent.at("gpu-pwr-totals"));
+			//? Temperature
+			Shared::trim_history(gpu.temp, 18);
+			//? Memory usage
+			Shared::trim_history(gpu.gpu_percent.at("gpu-vram-totals"));
 		}
 
 		shared_gpu_percent.at("gpu-average").push_back(avg / gpus.size());
@@ -2488,11 +2486,9 @@ namespace Gpu {
 		if (gpu_pwr_total_max != 0)
 			shared_gpu_percent.at("gpu-pwr-total").push_back(clamp(static_cast<long long>(round(pwr_total * 100.0 / gpu_pwr_total_max)), 0ll, 100ll));
 
-		if (width != 0) {
-			while (cmp_greater(shared_gpu_percent.at("gpu-average").size(), width * 2)) shared_gpu_percent.at("gpu-average").pop_front();
-			while (cmp_greater(shared_gpu_percent.at("gpu-pwr-total").size(), width * 2)) shared_gpu_percent.at("gpu-pwr-total").pop_front();
-			while (cmp_greater(shared_gpu_percent.at("gpu-vram-total").size(), width * 2)) shared_gpu_percent.at("gpu-vram-total").pop_front();
-		}
+		Shared::trim_history(shared_gpu_percent.at("gpu-average"));
+		Shared::trim_history(shared_gpu_percent.at("gpu-pwr-total"));
+		Shared::trim_history(shared_gpu_percent.at("gpu-vram-total"));
 
 		count = gpus.size();
 
@@ -2663,13 +2659,13 @@ namespace Mem {
 		//? Calculate percentages
 		for (const auto& name : mem_names) {
 			mem.percent.at(name).push_back(round((double)mem.stats.at(name) * 100 / totalMem));
-			while (cmp_greater(mem.percent.at(name).size(), width * 2)) mem.percent.at(name).pop_front();
+			Shared::trim_history(mem.percent.at(name));
 		}
 
 		if (show_swap and mem.stats.at("swap_total") > 0) {
 			for (const auto& name : swap_names) {
 				mem.percent.at(name).push_back(round((double)mem.stats.at(name) * 100 / mem.stats.at("swap_total")));
-				while (cmp_greater(mem.percent.at(name).size(), width * 2)) mem.percent.at(name).pop_front();
+				Shared::trim_history(mem.percent.at(name));
 			}
 			has_swap = true;
 		}
@@ -2937,7 +2933,7 @@ namespace Mem {
 							else
 								disk.io_write.push_back(max((int64_t)0, (sectors_write - disk.old_io.at(1))));
 							disk.old_io.at(1) = sectors_write;
-							while (cmp_greater(disk.io_write.size(), width * 2)) disk.io_write.pop_front();
+							Shared::trim_history(disk.io_write);
 
 							// skip characters until '4' is reached, indicating data type 4, next value will be out target
 							diskread.ignore(numeric_limits<streamsize>::max(), '4');
@@ -2952,14 +2948,14 @@ namespace Mem {
 							else
 								disk.io_read.push_back(max((int64_t)0, (sectors_read - disk.old_io.at(0))));
 							disk.old_io.at(0) = sectors_read;
-							while (cmp_greater(disk.io_read.size(), width * 2)) disk.io_read.pop_front();
+							Shared::trim_history(disk.io_read);
 
 							if (disk.io_activity.empty())
 								disk.io_activity.push_back(0);
 							else
 								disk.io_activity.push_back(max((int64_t)0, (io_ticks - disk.old_io.at(2))));
 							disk.old_io.at(2) = io_ticks;
-							while (cmp_greater(disk.io_activity.size(), width * 2)) disk.io_activity.pop_front();
+							Shared::trim_history(disk.io_activity);
 						} else {
 							for (int i = 0; i < 2; i++) { diskread >> std::ws; diskread.ignore(SSmax, ' '); }
 							diskread >> sectors_read;
@@ -2968,7 +2964,7 @@ namespace Mem {
 							else
 								disk.io_read.push_back(max((int64_t)0, (sectors_read - disk.old_io.at(0)) * 512));
 							disk.old_io.at(0) = sectors_read;
-							while (cmp_greater(disk.io_read.size(), width * 2)) disk.io_read.pop_front();
+							Shared::trim_history(disk.io_read);
 
 							for (int i = 0; i < 3; i++) { diskread >> std::ws; diskread.ignore(SSmax, ' '); }
 							diskread >> sectors_write;
@@ -2977,7 +2973,7 @@ namespace Mem {
 							else
 								disk.io_write.push_back(max((int64_t)0, (sectors_write - disk.old_io.at(1)) * 512));
 							disk.old_io.at(1) = sectors_write;
-							while (cmp_greater(disk.io_write.size(), width * 2)) disk.io_write.pop_front();
+							Shared::trim_history(disk.io_write);
 
 							for (int i = 0; i < 2; i++) { diskread >> std::ws; diskread.ignore(SSmax, ' '); }
 							diskread >> io_ticks;
@@ -2986,7 +2982,7 @@ namespace Mem {
 							else
 								disk.io_activity.push_back(clamp((long)round((double)(io_ticks - disk.old_io.at(2)) / (uptime - old_uptime) / 10), 0l, 100l));
 							disk.old_io.at(2) = io_ticks;
-							while (cmp_greater(disk.io_activity.size(), width * 2)) disk.io_activity.pop_front();
+							Shared::trim_history(disk.io_activity);
 						}
 					} else {
 						Logger::debug("Error in Mem::collect() : when opening {}", disk.stat);
@@ -3116,21 +3112,21 @@ namespace Mem {
 		else
 			disk.io_write.push_back(max((int64_t)0, (bytes_write_total - disk.old_io.at(1))));
 		disk.old_io.at(1) = bytes_write_total;
-		while (cmp_greater(disk.io_write.size(), width * 2)) disk.io_write.pop_front();
+		Shared::trim_history(disk.io_write);
 
 		if (disk.io_read.empty())
 			disk.io_read.push_back(0);
 		else
 			disk.io_read.push_back(max((int64_t)0, (bytes_read_total - disk.old_io.at(0))));
 		disk.old_io.at(0) = bytes_read_total;
-		while (cmp_greater(disk.io_read.size(), width * 2)) disk.io_read.pop_front();
+		Shared::trim_history(disk.io_read);
 
 		if (disk.io_activity.empty())
 			disk.io_activity.push_back(0);
 		else
 			disk.io_activity.push_back(max((int64_t)0, (io_ticks_total - disk.old_io.at(2))));
 		disk.old_io.at(2) = io_ticks_total;
-		while (cmp_greater(disk.io_activity.size(), width * 2)) disk.io_activity.pop_front();
+		Shared::trim_history(disk.io_activity);
 
 		return true;
 	}
@@ -3248,7 +3244,7 @@ namespace Net {
 
 					//? Add values to graph
 					bandwidth.push_back(saved_stat.speed);
-					while (cmp_greater(bandwidth.size(), width * 2)) bandwidth.pop_front();
+					Shared::trim_history(bandwidth);
 
 					//? Set counters for auto scaling
 					if (net_auto and selected_iface == iface) {
@@ -3401,7 +3397,7 @@ namespace Proc {
 		//? Update cpu percent deque for process cpu graph
 		if (not Config::getB("proc_per_core")) detailed.entry.cpu_p *= Shared::coreCount;
 		detailed.cpu_percent.push_back(clamp((long long)round(detailed.entry.cpu_p), 0ll, 100ll));
-		while (cmp_greater(detailed.cpu_percent.size(), width)) detailed.cpu_percent.pop_front();
+		Shared::trim_history(detailed.cpu_percent);
 
 		//? Process runtime
 		if (detailed.entry.state != 'X') detailed.elapsed = sec_to_dhms(uptime - (detailed.entry.cpu_s / Shared::clkTck));
@@ -3454,7 +3450,7 @@ namespace Proc {
 			redraw = true;
 		}
 
-		while (cmp_greater(detailed.mem_bytes.size(), width)) detailed.mem_bytes.pop_front();
+		Shared::trim_history(detailed.mem_bytes);
 
 		//? Get bytes read and written from proc/[pid]/io
 		if (fs::exists(pid_path / "io")) {
