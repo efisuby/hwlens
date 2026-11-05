@@ -121,6 +121,20 @@ TEST(json_snapshot, restore_roundtrip) {
 	EXPECT_EQ(Json::snapshot(restored), snap);
 }
 
+TEST(json_snapshot, restore_orders_by_numeric_pid) {
+	Json::State state;
+	for (const size_t pid : {100, 9, 1000, 10}) {
+		Proc::proc_info p;
+		p.pid = pid;
+		state.procs.push_back(p);
+	}
+	Json::State restored;
+	Json::restore(Json::snapshot(state), restored);
+	std::vector<size_t> pids;
+	for (const auto& p : restored.procs) pids.push_back(p.pid);
+	EXPECT_EQ(pids, (std::vector<size_t>{9, 10, 100, 1000}));
+}
+
 TEST(json_snapshot, rejects_other_versions) {
 	Json::State state;
 	auto snap = Json::snapshot(state);

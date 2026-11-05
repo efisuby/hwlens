@@ -189,12 +189,6 @@ namespace Gpu {
 namespace Proc {
 	std::unordered_map<size_t, uint64_t> gpu_mem;
 	bool gpu_mem_supported = false;
-bool set_priority(pid_t pid, int priority) {
-  if (setpriority(PRIO_PROCESS, pid, priority) == 0) {
-    return true;
-  }
-  return false;
-}
 
 	atomic<int> numpids{};
 	int filter_found{};

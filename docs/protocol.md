@@ -60,6 +60,9 @@ The marker keys start with a NUL character, which no data key contains.
 
 ## Requests
 
+Requests are accepted after the hello. A client that sends settings sends them right after
+the full snapshot, and the daemon answers with a `tick: false` message.
+
 | Request | Effect |
 |---|---|
 | `{"options":{"update_ms":500,"show_disks":true,...}}` | Collection settings (the fields of `Shared::CollectOptions`) and the tick interval. The whole request is rejected if one field is invalid. |

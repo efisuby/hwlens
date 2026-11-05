@@ -171,6 +171,14 @@ namespace Cli {
 				cli.themes_dir = std::make_optional(themes_dir);
 				continue;
 			}
+			if (arg == "--socket") {
+				if (++it == args.end()) {
+					error("Socket requires an argument");
+					return std::unexpected { 1 };
+				}
+				cli.socket = std::make_optional(std::string { *it });
+				continue;
+			}
 			if (arg == "-u" || arg == "--update") {
 				// This flag requires an argument.
 				if (++it == args.end()) {
@@ -255,6 +263,7 @@ namespace Cli {
 			"  {2}    --force-utf{1}         Override automatic UTF locale detection\n"
 			"  {2}-l, --low-color{1}         Disable true color, 256 colors only\n"
 			"  {2}-p, --preset{1} <id>       Start with a preset (0-9)\n"
+			"  {2}    --socket{1} <path>     Socket of hwlensd (default /run/hwlensd/hwlensd.sock, or $HWLENSD_SOCKET)\n"
 			"  {2}-t, --tty{1}               Force tty mode with ANSI graph symbols and 16 colors only\n"
 			"  {2}    --themes-dir{1} <dir>  Path to a custom themes directory\n"
 			"  {2}    --no-tty{1}            Force disable tty mode\n"

@@ -26,28 +26,33 @@ Decisions:
 * Histories have a fixed length (`Shared::history_size`).
 * Linux only.
 
-**1. Schema and JSON.**
-* `to_json` / `from_json` for `cpu_info`, `mem_info`, `net_info`, `proc_info`, `gpu_info` and the static metadata: CPU name, core kinds, sensors.
-* A `"v": 1` schema version field.
-* `hwlens --dump-json` prints one snapshot.
+**1. Schema and JSON.** *Done.*
+* `src/hwlens_json.cpp`: snapshot of every collect() result and the collector globals
+  (CPU name, core kinds, sensors, selected interface, ...), with a `"v": 1` schema version.
+* `diff()` / `patch()` turn two snapshots into a delta; histories that got new samples are sent as their tail.
+* `hwlensd --dump-json` prints one snapshot.
 
-**2. hwlensd.**
-* Collection loop, configured in `/etc/hwlens/hwlensd.conf`: update interval and history length.
-* Protocol, one JSON object per line:
-  * `{"hello":{"v":1}}` returns the metadata and the full histories;
-  * `{"subscribe":{"every":N,"sections":[...]}}` starts a stream of snapshots;
-  * `{"detail":{"pid":123}}` returns extended data for one process.
-* Requests are size-limited, and the request grammar is kept small.
+**2. hwlensd.** *Done.*
+* Collection loop; `/etc/hwlens/hwlensd.conf` sets the update interval and the log level.
+* Protocol in [protocol.md](protocol.md): `hello` returns the full snapshot, then every tick sends a delta.
+  Settings (`options`), net box actions, signals and nice values are requests.
+* Requests are size- and depth-limited, and every option is validated before it is applied.
 
-**3. The TUI becomes a client.**
-* The runner reads snapshots from the socket instead of calling `collect()`.
-* `Proc::arrange()` works on the client's copy of the list.
-* When the daemon is missing, the TUI prints `hwlensd is not running: systemctl start hwlensd.socket`.
+**3. The TUI becomes a client.** *Done.*
+* `src/hwlens_client.cpp` keeps a copy of the daemon's snapshot and serves `Cpu/Mem/Net/Proc/Gpu::collect()`
+  from it, so the drawing code did not change. `hwlens` no longer links the collectors.
+* The runner loads the newest state at the start of a cycle and sends the settings when they change.
+  The main loop draws a frame per tick of the daemon.
+* `Proc::arrange()` works on the client's copy of the list; collapsed tree branches stay on the client.
+* Without the daemon, the TUI exits with
+  `hwlensd is not running (...). Start it with: sudo systemctl enable --now hwlensd.socket`.
+  A lost connection is retried every second, and the settings are sent again.
 
-**4. Actions through the daemon** (kill, signal, nice).
-* The daemon gets the client uid from `SO_PEERCRED`.
-* A client may act only on its own processes. A root client may act on any process.
-* Every action is logged to the journal.
+**4. Actions through the daemon** (kill, signal, nice). *Done.*
+* The daemon gets the client uid from `SO_PEERCRED` and pins the process with a pidfd.
+* A client may act only on processes whose real or saved uid is its own, and may not lower a nice value.
+  A root client may do anything.
+* Every action and every refusal is logged.
 
 **5. Packaging and hardening.**
 * `hwlensd.socket`: `ListenStream=/run/hwlensd/hwlensd.sock`, `SocketGroup=hwlens`, `SocketMode=0660`.

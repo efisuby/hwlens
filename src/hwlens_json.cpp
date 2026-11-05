@@ -250,6 +250,8 @@ namespace Json {
 		for (const auto& [pid, p] : proc.at("list").items()) {
 			proc_from_json(p, state.procs.emplace_back());
 		}
+		//? Object keys sort as strings; the collector lists processes by numeric pid, and sorting keeps ties that way
+		std::ranges::sort(state.procs, {}, &Proc::proc_info::pid);
 		detail_from_json(proc.at("detail"), Proc::detailed);
 		Proc::gpu_mem.clear();
 		for (const auto& [pid, bytes] : proc.at("gpu_mem").items()) Proc::gpu_mem[std::stoull(pid)] = bytes.get<uint64_t>();
@@ -337,5 +339,13 @@ namespace Json {
 			}
 		}
 		target = delta;
+	}
+
+	auto options_json(const Shared::CollectOptions& opts) -> json {
+		json out = json::object();
+		for (const auto& o : string_options) out[o.name] = opts.*(o.field);
+		for (const auto& o : bool_options) out[o.name] = opts.*(o.field);
+		out["detailed_pid"] = opts.detailed_pid;
+		return out;
 	}
 }

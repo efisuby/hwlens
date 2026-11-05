@@ -38,48 +38,6 @@ using Json::json;
 
 namespace Server {
 	namespace {
-		struct StringOption { const char* name; string Shared::CollectOptions::* field; };
-		struct BoolOption { const char* name; bool Shared::CollectOptions::* field; };
-
-		using Opts = Shared::CollectOptions;
-		constexpr std::array string_options {
-			StringOption{"cpu_sensor", &Opts::cpu_sensor},
-			StringOption{"freq_mode", &Opts::freq_mode},
-			StringOption{"cpu_core_map", &Opts::cpu_core_map},
-			StringOption{"selected_battery", &Opts::selected_battery},
-			StringOption{"shown_gpus", &Opts::shown_gpus},
-			StringOption{"disks_filter", &Opts::disks_filter},
-			StringOption{"net_iface", &Opts::net_iface},
-		};
-		constexpr std::array bool_options {
-			BoolOption{"show_coretemp", &Opts::show_coretemp},
-			BoolOption{"show_cpu_freq", &Opts::show_cpu_freq},
-			BoolOption{"check_temp", &Opts::check_temp},
-			BoolOption{"show_fans", &Opts::show_fans},
-			BoolOption{"show_battery", &Opts::show_battery},
-			BoolOption{"show_cpu_watts", &Opts::show_cpu_watts},
-			BoolOption{"nvml_measure_pcie_speeds", &Opts::nvml_measure_pcie_speeds},
-			BoolOption{"rsmi_measure_pcie_speeds", &Opts::rsmi_measure_pcie_speeds},
-			BoolOption{"show_swap", &Opts::show_swap},
-			BoolOption{"swap_disk", &Opts::swap_disk},
-			BoolOption{"show_disks", &Opts::show_disks},
-			BoolOption{"zfs_arc_cached", &Opts::zfs_arc_cached},
-			BoolOption{"disk_free_priv", &Opts::disk_free_priv},
-			BoolOption{"use_fstab", &Opts::use_fstab},
-			BoolOption{"only_physical", &Opts::only_physical},
-			BoolOption{"zfs_hide_datasets", &Opts::zfs_hide_datasets},
-			BoolOption{"net_sync", &Opts::net_sync},
-			BoolOption{"net_auto", &Opts::net_auto},
-			BoolOption{"proc_info_smaps", &Opts::proc_info_smaps},
-			BoolOption{"proc_per_core", &Opts::proc_per_core},
-			BoolOption{"proc_filter_kernel", &Opts::proc_filter_kernel},
-			BoolOption{"show_detailed", &Opts::show_detailed},
-			BoolOption{"pause_proc_list", &Opts::pause_proc_list},
-			BoolOption{"keep_dead_proc_usage", &Opts::keep_dead_proc_usage},
-			BoolOption{"proc_show_unit", &Opts::proc_show_unit},
-			BoolOption{"proc_show_vram", &Opts::proc_show_vram},
-		};
-
 		auto printable(string_view s) -> bool {
 			return std::ranges::all_of(s, [](unsigned char c) { return c >= 0x20 and c != 0x7f; });
 		}
@@ -137,13 +95,13 @@ namespace Server {
 				next.detailed_pid = value.get<size_t>();
 				continue;
 			}
-			if (const auto s = std::ranges::find(string_options, key, &StringOption::name); s != string_options.end()) {
+			if (const auto s = std::ranges::find(Json::string_options, key, &Json::StringOption::name); s != Json::string_options.end()) {
 				if (not value.is_string() or not valid_string_option(key, value.get_ref<const string&>()))
 					return fmt::format("bad value for {}", key);
 				next.*(s->field) = value.get<string>();
 				continue;
 			}
-			if (const auto b = std::ranges::find(bool_options, key, &BoolOption::name); b != bool_options.end()) {
+			if (const auto b = std::ranges::find(Json::bool_options, key, &Json::BoolOption::name); b != Json::bool_options.end()) {
 				if (not value.is_boolean()) return fmt::format("{} must be a boolean", key);
 				next.*(b->field) = value.get<bool>();
 				continue;

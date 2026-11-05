@@ -27,6 +27,7 @@ tab-size = 4
 #include <utility>
 #include <cmath>
 
+#include "hwlens_client.hpp"
 #include "hwlens_input.hpp"
 #include "hwlens_tools.hpp"
 #include "hwlens_config.hpp"
@@ -607,30 +608,19 @@ namespace Input {
 						else if (key == "n") {
 							if (++c_index == (int)Net::interfaces.size()) c_index = 0;
 						}
+						//? Shown at once, hwlensd confirms it with its next state
 						Net::selected_iface = Net::interfaces.at(c_index);
-						Net::rescale = true;
+						Client::net_select(Net::selected_iface);
 					}
 				}
-				else if (key == "y") {
-					Config::flip("net_sync");
-					Net::rescale = true;
-				}
-				else if (key == "a") {
-					Config::flip("net_auto");
-					Net::rescale = true;
+				else if (is_in(key, "y", "a")) {
+					Config::flip(key == "y" ? "net_sync" : "net_auto");
+					//? The new setting has to be there before the daemon recalculates the scale
+					Client::send_options(Config::collect_options(), static_cast<uint64_t>(Config::getI("update_ms")));
+					Client::net_rescale();
 				}
 				else if (key == "z") {
-					atomic_wait(Runner::active);
-					auto& ndev = Net::current_net.at(Net::selected_iface);
-					if (ndev.stat.at("download").offset + ndev.stat.at("upload").offset > 0) {
-						ndev.stat.at("download").offset = 0;
-						ndev.stat.at("upload").offset = 0;
-					}
-					else {
-						ndev.stat.at("download").offset = ndev.stat.at("download").last + ndev.stat.at("download").rollover;
-						ndev.stat.at("upload").offset = ndev.stat.at("upload").last + ndev.stat.at("upload").rollover;
-					}
-					no_update = false;
+					Client::net_reset_totals();
 				}
 				else keep_going = true;
 

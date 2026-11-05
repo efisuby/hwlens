@@ -16,6 +16,7 @@ indent = tab
 tab-size = 4
 */
 
+#include "hwlens_client.hpp"
 #include "hwlens_menu.hpp"
 
 #include "hwlens_config.hpp"
@@ -1025,8 +1026,8 @@ namespace Menu {
 				signalKillRet = ESRCH;
 				menuMask.set(SignalReturn);
 			}
-			else if (kill(s_pid.value(), selected_signal) != 0) {
-				signalKillRet = errno;
+			else if (const int err = Client::send_signal(static_cast<pid_t>(s_pid.value()), selected_signal); err != 0) {
+				signalKillRet = err;
 				menuMask.set(SignalReturn);
 			}
 			goto MenuClosing;
@@ -1149,8 +1150,8 @@ namespace Menu {
 		auto ret = messageBox.input(key);
 		if (ret == msgBox::Ok_Yes) {
 			signalKillRet = 0;
-			if (kill(s_pid.value(), signalToSend) != 0) {
-				signalKillRet = errno;
+			if (const int err = Client::send_signal(static_cast<pid_t>(s_pid.value()), signalToSend); err != 0) {
+				signalKillRet = err;
 				menuMask.set(SignalReturn);
 			}
 			messageBox.clear();
@@ -1186,6 +1187,9 @@ namespace Menu {
 			}
 			else if (signalKillRet == ESRCH) {
 				cont_vec.push_back("Process not found!" + Fx::reset);
+			}
+			else if (signalKillRet == ENOTCONN or signalKillRet == ETIMEDOUT) {
+				cont_vec.push_back("hwlensd did not answer!" + Fx::reset);
 			}
 			else {
 				cont_vec.push_back("Unknown error! (errno: " + to_string(signalKillRet) + ')' + Fx::reset);
@@ -1813,9 +1817,8 @@ static int optionsMenu(const string& key) {
 					}
 					catch (...) { selected_nice = 0; }
 				}
-				if (not Proc::set_priority(s_pid.value(), selected_nice)) {
-					// TODO: show error message
-				}
+				//? A refusal is logged by Client::set_nice()
+				Client::set_nice(static_cast<pid_t>(s_pid.value()), selected_nice);
 			}
 			goto MenuClosing;
 		}

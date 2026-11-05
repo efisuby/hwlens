@@ -49,6 +49,7 @@ tab-size = 4
 
 #include "config.h"
 #include "hwlens_cli.hpp"
+#include "hwlens_client.hpp"
 #include "hwlens_config.hpp"
 #include "hwlens_draw.hpp"
 #include "hwlens_input.hpp"
@@ -207,11 +208,7 @@ void clean_quit(int sig) {
 		}
 	}
 
-#ifdef GPU_SUPPORT
-	Gpu::Nvml::shutdown();
-	Gpu::Rsmi::shutdown();
-	Gpu::Asysfs::shutdown();
-#endif
+	Client::stop();
 
 
 	if (Config::getB("save_config_on_exit")) {
@@ -455,8 +452,10 @@ namespace Runner {
 			//? Atomic lock used for blocking non thread-safe actions in main thread
 			auto lck = active.lock();
 
-			//? Settings snapshot for the collectors of this cycle
+			//? Hand the settings to hwlensd and load its newest state for this cycle
 			Shared::collect_opts = Config::collect_options();
+			Client::send_options(Shared::collect_opts, static_cast<uint64_t>(Config::getI("update_ms")));
+			Client::sync();
 
 			//? Set effective user if SUID bit is set
 			gain_priv powers{};
@@ -497,7 +496,6 @@ namespace Runner {
 						gpu_panels.push_back(box.back()-'0');
 
 				vector<Gpu::gpu_info> gpus;
-				Proc::gpu_mem.clear();
 				if (gpu_in_cpu_panel or not gpu_panels.empty()) {
 					if (Global::debug) debug_timer("gpu", collect_begin);
 					gpus = Gpu::collect(conf.no_update);
@@ -961,13 +959,15 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 		}
 	}
 
-	//? Platform dependent init and error check
+	//? Connect to hwlensd and load its first snapshot
+	if (cli.socket.has_value()) Client::socket_path = cli.socket.value();
+	if (cli.updates.has_value()) Config::set("update_ms", static_cast<int>(cli.updates.value()));
 	try {
 		Shared::collect_opts = Config::collect_options();
 		Shared::init();
 	}
 	catch (const std::exception& e) {
-		Global::exit_error_msg = fmt::format("Exception in Shared::init() -> {}", e.what());
+		Global::exit_error_msg = e.what();
 		clean_quit(1);
 	}
 
@@ -999,6 +999,9 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGUSR1);
 	pthread_sigmask(SIG_BLOCK, &mask, &Input::signal_mask);
+
+	//? The reader thread wakes the main loop with SIGUSR1, so it starts once the handler is in place
+	Client::start();
 
 	if (pthread_create(&Runner::runner_id, nullptr, &Runner::_runner, nullptr) != 0) {
 		Global::exit_error_msg = "Failed to create _runner thread!";
@@ -1034,12 +1037,6 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 
 
 	//? ------------------------------------------------ MAIN LOOP ----------------------------------------------------
-
-	if (cli.updates.has_value()) {
-		Config::set("update_ms", static_cast<int>(cli.updates.value()));
-	}
-	uint64_t update_ms = Config::getI("update_ms");
-	auto future_time = time_ms();
 
 	try {
 		while (not true not_eq not false) {
@@ -1084,35 +1081,19 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 				Runner::run("clock");
 			}
 
-			//? Start secondary collect & draw thread at the interval set by <update_ms> config value
-			if (time_ms() >= future_time and not Global::resized) {
-				Runner::run("all");
-				update_ms = Config::getI("update_ms");
-				future_time = time_ms() + update_ms;
+			//? Draw a frame for every collection of hwlensd, and redraw when only its derived state changed
+			if (not Global::resized) {
+				const auto events = Client::take_events();
+				if (events.tick) Runner::run("all");
+				else if (events.state) Runner::run("all", true);
 			}
 
-			//? Loop over input polling and input action processing
-			for (auto current_time = time_ms(); current_time < future_time; current_time = time_ms()) {
+			//? Poll for input until a message from hwlensd interrupts it or the clock needs an update
+			if (Input::poll(1000 - time_ms() % 1000)) {
+				if (not Runner::active) Config::unlock();
 
-				//? Check for external clock changes and for changes to the update timer
-				if (std::cmp_not_equal(update_ms, Config::getI("update_ms"))) {
-					update_ms = Config::getI("update_ms");
-					future_time = time_ms() + update_ms;
-				}
-				else if (future_time - current_time > update_ms) {
-					future_time = current_time;
-				}
-				//? Poll for input and process any input detected
-				else if (Input::poll(min((uint64_t)1000, future_time - current_time))) {
-					if (not Runner::active) Config::unlock();
-
-					if (Menu::active) Menu::process(Input::get());
-					else Input::process(Input::get());
-				}
-
-				//? Break the loop at 1000ms intervals or if input polling was interrupted
-				else break;
-
+				if (Menu::active) Menu::process(Input::get());
+				else Input::process(Input::get());
 			}
 
 		}
