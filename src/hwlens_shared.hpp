@@ -38,9 +38,6 @@ tab-size = 4
 #include <ifaddrs.h>
 // clang-format on
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-# include <kvm.h>
-#endif
 
 using std::array;
 using std::atomic;
@@ -98,14 +95,6 @@ namespace Shared {
 
 	extern long coreCount, page_size, clk_tck;
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-	struct KvmDeleter {
-		void operator()(kvm_t* handle) {
-			kvm_close(handle);
-		}
-	};
-	using KvmPtr = std::unique_ptr<kvm_t, KvmDeleter>;
-#endif
 }
 
 #if defined(GPU_SUPPORT)
@@ -218,11 +207,6 @@ namespace Gpu {
 	namespace Asysfs {
 		extern bool shutdown();
 	}
-	#ifdef __APPLE__
-	namespace AppleSilicon {
-		extern bool shutdown();
-	}
-	#endif
 
 	//* Collect gpu stats and temperatures
     auto collect(bool no_update = false) -> vector<gpu_info>&;

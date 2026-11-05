@@ -21,7 +21,6 @@ include(CheckIPOSupported)
 include(CMakeDependentOption)
 
 # Make our Find<Package>.cmake files available
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,7 +39,7 @@ else()
   option(HWLENS_LTO "Enable LTO" OFF)
 endif()
 
-if(HWLENS_STATIC AND NOT APPLE)
+if(HWLENS_STATIC)
   # Set this before calling find_package
   set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 endif()
@@ -67,21 +66,12 @@ if(HWLENS_LTO)
   set_target_properties(libhwlens PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
-if(APPLE)
-  target_sources(libhwlens PRIVATE src/osx/hwlens_collect.cpp src/osx/sensors.cpp src/osx/smc.cpp)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "MidnightBSD")
-  target_sources(libhwlens PRIVATE src/freebsd/hwlens_collect.cpp)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
-  target_sources(libhwlens PRIVATE src/openbsd/hwlens_collect.cpp src/openbsd/sysctlbyname.cpp)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
-  target_sources(libhwlens PRIVATE src/netbsd/hwlens_collect.cpp)
-elseif(LINUX)
-  target_sources(libhwlens PRIVATE src/linux/hwlens_collect.cpp)
-  if(HWLENS_GPU)
-    add_subdirectory(src/linux/intel_gpu_top)
-  endif()
-else()
-  message(FATAL_ERROR "${CMAKE_SYSTEM_NAME} is not supported")
+if(NOT LINUX)
+  message(FATAL_ERROR "${CMAKE_SYSTEM_NAME} is not supported, hwlens runs on Linux only")
+endif()
+target_sources(libhwlens PRIVATE src/linux/hwlens_collect.cpp)
+if(HWLENS_GPU)
+  add_subdirectory(src/linux/intel_gpu_top)
 endif()
 
 # Generate build info
@@ -136,9 +126,7 @@ target_compile_options(libhwlens PUBLIC -Wall -Wextra -Wpedantic)
 
 include(CheckCXXCompilerFlag)
 
-if(NOT APPLE)
-  target_compile_options(libhwlens PUBLIC -fstack-clash-protection)
-endif()
+target_compile_options(libhwlens PUBLIC -fstack-clash-protection)
 check_cxx_compiler_flag(-fstack-protector HAS_FSTACK_PROTECTOR)
 if(HAS_FSTACK_PROTECTOR)
   target_compile_options(libhwlens PUBLIC -fstack-protector)
@@ -162,7 +150,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(libhwlens Threads::Threads)
 
 # Enable GPU support
-if(LINUX AND HWLENS_GPU)
+if(HWLENS_GPU)
   target_compile_definitions(libhwlens PUBLIC GPU_SUPPORT)
 
   if(HWLENS_RSMI_STATIC)
@@ -197,57 +185,6 @@ endif()
 if(HWLENS_STATIC)
   target_compile_definitions(libhwlens PUBLIC STATIC_BUILD)
   target_link_options(libhwlens PUBLIC -static LINKER:--fatal-warnings)
-endif()
-
-if(APPLE)
-  target_link_libraries(libhwlens
-      $<LINK_LIBRARY:FRAMEWORK,CoreFoundation> $<LINK_LIBRARY:FRAMEWORK,IOKit>
-  )
-  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64" AND HWLENS_GPU)
-    target_compile_definitions(libhwlens PUBLIC GPU_SUPPORT)
-
-    find_library(IOREPORT_LIB IOReport)
-    if(IOREPORT_LIB)
-      target_link_libraries(libhwlens ${IOREPORT_LIB})
-    endif()
-  endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "MidnightBSD")
-  # Avoid version mismatch for libstdc++ when a specific version of GCC is installed and not the
-  # default one since all use the default ones RPATH
-  if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    string(REGEX MATCH "^[0-9]+" GCC_VERSION_MAJOR "${CMAKE_CXX_COMPILER_VERSION}")
-    set_target_properties(hwlens PROPERTIES
-      INSTALL_RPATH "/usr/local/lib/gcc${GCC_VERSION_MAJOR}"
-      BUILD_WITH_INSTALL_RPATH TRUE
-    )
-
-    # The gcc compiler wrapper doesn't add '--eh-frame-hdr' on FreeBSD with static builds
-    # https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=278551
-    if(HWLENS_STATIC)
-      target_link_options(libhwlens PUBLIC LINKER:--eh-frame-hdr)
-    endif()
-  endif()
-
-  find_package(devstat REQUIRED)
-  find_package(kvm REQUIRED)
-  target_link_libraries(libhwlens devstat::devstat kvm::kvm)
-  if(HWLENS_STATIC)
-    find_package(elf REQUIRED)
-    target_link_libraries(libhwlens elf::elf)
-  endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(libhwlens PUBLIC -static-libstdc++)
-  endif()
-  find_package(kvm REQUIRED)
-  target_link_libraries(libhwlens kvm::kvm)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(libhwlens PUBLIC -static-libstdc++)
-  endif()
-  find_package(kvm REQUIRED)
-  find_package(proplib REQUIRED)
-  target_link_libraries(libhwlens kvm::kvm proplib::proplib)
 endif()
 
 # Check if lowdown is installed

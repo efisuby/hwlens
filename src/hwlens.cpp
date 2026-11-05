@@ -29,9 +29,6 @@ tab-size = 4
 #include <pthread.h>
 #include <span>
 #include <string_view>
-#ifdef __FreeBSD__
-	#include <pthread_np.h>
-#endif
 #include <thread>
 #include <numeric>
 #include <ranges>
@@ -45,17 +42,7 @@ tab-size = 4
 #include <utility>
 #include <semaphore>
 
-#ifdef __APPLE__
-	#include <CoreFoundation/CoreFoundation.h>
-	#include <mach-o/dyld.h>
-	#include <limits.h>
-#endif
 
-#ifdef __NetBSD__
-	#include <sys/param.h>
-	#include <sys/sysctl.h>
-	#include <unistd.h>
-#endif
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -214,25 +201,16 @@ void clean_quit(int sig) {
 	Global::quitting = true;
 	Runner::stop();
 	if (Global::_runner_started) {
-	#if defined __APPLE__ || defined __OpenBSD__ || defined __NetBSD__
-		if (pthread_join(Runner::runner_id, nullptr) != 0) {
-			Logger::warning("Failed to join _runner thread on exit!");
-		}
-	#else
 		constexpr struct timespec ts { .tv_sec = 5, .tv_nsec = 0 };
 		if (pthread_timedjoin_np(Runner::runner_id, nullptr, &ts) != 0) {
 			Logger::warning("Failed to join _runner thread on exit!");
 		}
-	#endif
 	}
 
 #ifdef GPU_SUPPORT
 	Gpu::Nvml::shutdown();
 	Gpu::Rsmi::shutdown();
 	Gpu::Asysfs::shutdown();
-	#ifdef __APPLE__
-	Gpu::AppleSilicon::shutdown();
-	#endif
 #endif
 
 
@@ -254,11 +232,7 @@ void clean_quit(int sig) {
 
 	const auto excode = (sig != -1 ? sig : 0);
 
-#if defined __APPLE__ || defined __OpenBSD__ || defined __NetBSD__
-	_Exit(excode);
-#else
 	quick_exit(excode);
-#endif
 }
 
 //* Handler for SIGTSTP; stops threads, restores terminal and sends SIGSTOP
@@ -814,12 +788,10 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 		Logger::debug("TTY mode set via config");
 	}
 
-#if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
 	else if (Term::current_tty.starts_with("/dev/tty")) {
 		Config::set("tty_mode", true);
 		Logger::debug("Auto detect real TTY");
 	}
-#endif
 
 	Logger::debug("TTY mode enabled: {}", Config::getB("tty_mode"));
 }
@@ -889,31 +861,9 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	}
 
 	//? Try to find global hwlens theme path relative to binary path
-#ifdef __linux__
 	{ 	std::error_code ec;
 		Global::self_path = fs::read_symlink("/proc/self/exe", ec).remove_filename();
 	}
-#elif __APPLE__
-	{
-		char buf [PATH_MAX];
-		uint32_t bufsize = PATH_MAX;
-		if(!_NSGetExecutablePath(buf, &bufsize))
-			Global::self_path = fs::path(buf).remove_filename();
-	}
-#elif __NetBSD__
-	{
-		int mib[4];
-		char buf[PATH_MAX];
-		size_t bufsize = sizeof buf;
-
-		mib[0] = CTL_KERN;
-		mib[1] = KERN_PROC_ARGS;
-		mib[2] = getpid();
-		mib[3] = KERN_PROC_PATHNAME;
-		if (sysctl(mib, 4, buf, &bufsize, NULL, 0) == 0)
-			Global::self_path = fs::path(buf).remove_filename();
-	}
-#endif
 	if (std::error_code ec; not Global::self_path.empty()) {
 		Theme::theme_dir = fs::canonical(Global::self_path / "../share/hwlens/themes", ec);
 		if (ec or not fs::is_directory(Theme::theme_dir) or access(Theme::theme_dir.c_str(), R_OK) == -1) Theme::theme_dir.clear();
@@ -972,34 +922,12 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 			}
 		}
 	//
-	#ifdef __APPLE__
-		if (found.empty()) {
-			CFLocaleRef cflocale = CFLocaleCopyCurrent();
-			CFStringRef id_value = (CFStringRef)CFLocaleGetValue(cflocale, kCFLocaleIdentifier);
-			auto loc_id = CFStringGetCStringPtr(id_value, kCFStringEncodingUTF8);
-			CFRelease(cflocale);
-			std::string cur_locale = (loc_id != nullptr ? loc_id : "");
-			if (cur_locale.empty()) {
-				Logger::warning("No UTF-8 locale detected! Some symbols might not display correctly.");
-			}
-			else if (std::setlocale(LC_ALL, string(cur_locale + ".UTF-8").c_str()) != nullptr) {
-				Logger::debug("Setting LC_ALL={}.UTF-8", cur_locale);
-			}
-			else if(std::setlocale(LC_ALL, "en_US.UTF-8") != nullptr) {
-				Logger::debug("Setting LC_ALL=en_US.UTF-8");
-			}
-			else {
-				Logger::warning("Failed to set macos locale, continuing anyway.");
-			}
-		}
-	#else
 		if (found.empty() and cli.force_utf) {
 			Logger::warning("No UTF-8 locale detected! Forcing start with --force-utf argument.");
 		} else if (found.empty()) {
 			Global::exit_error_msg = "No UTF-8 locale detected!\nUse --force-utf argument to force start if you're sure your terminal can handle it.";
 			clean_quit(1);
 		}
-	#endif
 		else if (not set_failure) {
 			Logger::debug("Setting LC_ALL={}", found);
 		}

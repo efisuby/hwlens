@@ -154,10 +154,8 @@ namespace Term {
 				tcgetattr(STDIN_FILENO, &initial_settings);
 				current_tty = (ttyname(STDIN_FILENO) != nullptr ? static_cast<string>(ttyname(STDIN_FILENO)) : "unknown");
 
-				//? Disable stream sync - this does not seem to work on OpenBSD
-#ifndef __OpenBSD__
+				//? Disable stream sync
 				cout.sync_with_stdio(false);
-#endif
 
 				//? Disable stream ties
 				cout.tie(nullptr);

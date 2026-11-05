@@ -44,11 +44,7 @@ tab-size = 4
 #include <source_location>
 #endif
 #ifndef HOST_NAME_MAX
-	#ifdef __APPLE__
-		#define HOST_NAME_MAX 255
-	#else
 		#define HOST_NAME_MAX 64
-	#endif
 #endif
 
 #include <fmt/core.h>
@@ -254,13 +250,7 @@ namespace Tools {
 	//* Return uptime in microseconds, excluding time spent in system suspend
 	inline uint64_t uptime_micros() {
 		struct timespec ts{};
-#ifdef __APPLE__
-		if (clock_gettime(CLOCK_UPTIME_RAW, &ts) != 0) return 0;
-#elif defined(__FreeBSD__)
-		if (clock_gettime(CLOCK_UPTIME, &ts) != 0) return 0;
-#else
 		if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
-#endif
 		return static_cast<uint64_t>(ts.tv_sec) * 1'000'000 + static_cast<uint64_t>(ts.tv_nsec) / 1000;
 	}
 

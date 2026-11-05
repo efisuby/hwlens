@@ -862,11 +862,7 @@ namespace Cpu {
 					+ Theme::c("graph_text") + "up" + Mv::r(1) + upstr;
 			}
 
-		#ifdef __linux__
 			const bool freq_range = is_in(Config::getS("freq_mode"), "range", "clusters");
-		#else
-			const bool freq_range = false;
-		#endif
 
 			//? Cpu clock and cpu meter
 			if (Config::getB("show_cpu_freq") and not cpuHz.empty())
@@ -2586,11 +2582,7 @@ namespace Draw {
 
 			auto& custom = Config::getS("custom_cpu_name");
 			static const bool hasCpuHz = not Cpu::get_cpuHz().empty();
-		#ifdef __linux__
 			static const bool freq_range = is_in(Config::getS("freq_mode"), "range", "clusters");
-		#else
-			static const bool freq_range = false;
-		#endif
 			const string cpu_title = uresize(
 					(custom.empty() ? Cpu::cpuName : custom),
 					b_width - (Config::getB("show_cpu_freq") and hasCpuHz ? (freq_range ? 24 : 14) : 5)
