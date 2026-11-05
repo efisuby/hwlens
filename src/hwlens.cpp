@@ -607,8 +607,10 @@ namespace Runner {
 					try {
 						if (Global::debug) debug_timer("proc", collect_begin);
 
-						//? Start collect
-						auto proc = Proc::collect(conf.no_update);
+						//? Start collect, then filter, sort and build the tree for this view
+						auto& procs = Proc::collect(conf.no_update);
+						Proc::arrange(procs, Proc::collected_new);
+						auto proc = procs;
 
 						if (Global::debug) debug_timer("proc", draw_begin);
 

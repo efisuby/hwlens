@@ -51,7 +51,6 @@ tab-size = 4
 	#include <pwd.h>
 #endif
 
-#include "../hwlens_config.hpp"
 #include "../hwlens_log.hpp"
 #include "../hwlens_shared.hpp"
 #include "../hwlens_tools.hpp"
@@ -3361,18 +3360,12 @@ namespace Proc {
 
 	vector<proc_info> current_procs;
 	std::unordered_map<string, string> uid_user;
-	string current_sort;
-	string current_filter;
-	bool current_rev{};
-	bool is_tree_mode;
 
 	fs::file_time_type passwd_time;
 
 	uint64_t cputimes;
-	int collapse = -1, expand = -1, toggle_children = -1, collapse_all = -1;
 	uint64_t old_cputimes{};
-	atomic<int> numpids{};
-	int filter_found{};
+	bool collected_new{};
 
 	detail_container detailed;
 	constexpr size_t KTHREADD = 2;
@@ -3477,27 +3470,15 @@ namespace Proc {
 		}
 	}
 
-	//* Collects and sorts process information from /proc
+	//* Collects process information from /proc, ordering is done by Proc::arrange()
 	auto collect(bool no_update) -> vector<proc_info>& {
+		collected_new = false;
 		if (Runner::stopping) return current_procs;
-		const auto& sorting = Config::getS("proc_sorting");
-		auto reverse = Config::getB("proc_reversed");
-		const auto& filter = Config::getS("proc_filter");
 		auto per_core = Shared::collect_opts.proc_per_core;
 		auto should_filter_kernel = Shared::collect_opts.proc_filter_kernel;
-		auto tree = Config::getB("proc_tree");
 		auto show_detailed = Shared::collect_opts.show_detailed;
 		const auto pause_proc_list = Shared::collect_opts.pause_proc_list;
 		const size_t detailed_pid = Shared::collect_opts.detailed_pid;
-		bool should_filter = current_filter != filter;
-		if (should_filter) current_filter = filter;
-		bool sorted_change = (sorting != current_sort or reverse != current_rev or should_filter);
-		bool tree_mode_change = tree != is_tree_mode;
-		if (sorted_change) {
-			current_sort = sorting;
-			current_rev = reverse;
-		}
-		if (tree_mode_change) is_tree_mode = tree;
 		ifstream pread;
 		string long_string;
 		string short_str;
@@ -3517,7 +3498,7 @@ namespace Proc {
 		}
 		//* ---------------------------------------------Collection start----------------------------------------------
 		else {
-			should_filter = true;
+			collected_new = true;
 			found.clear();
 
 			//? First make sure kernel proc cache is cleared.
@@ -3801,118 +3782,9 @@ namespace Proc {
 		}
 		//* ---------------------------------------------Collection done-----------------------------------------------
 
-		//* Match filter if defined
-		if (should_filter) {
-			filter_found = 0;
-			for (auto& p : current_procs) {
-				if (not tree and not filter.empty()) {
-					if (!matches_filter(p, filter)) {
-						p.filtered = true;
-						filter_found++;
-					} else {
-						p.filtered = false;
-					}
-				} else {
-					p.filtered = false;
-				}
-			}
-		}
-
-		//* Sort processes
-		if ((sorted_change or tree_mode_change) or (not no_update and not pause_proc_list)) {
-			proc_sorter(current_procs, sorting, reverse, tree);
-		}
-
-		//* Generate tree view if enabled
-		if (tree and (not no_update or should_filter or sorted_change)) {
-			bool locate_selection = false;
-
-			if (toggle_children != -1) {
-				auto collapser = rng::find(current_procs, toggle_children, &proc_info::pid);
-				if (collapser != current_procs.end()){
-					for (auto& p : current_procs) {
-						if (p.ppid == collapser->pid) {
-							auto child = rng::find(current_procs, p.pid, &proc_info::pid);
-							if (child != current_procs.end()){
-								child->collapsed = not child->collapsed;
-							}
-						}
-					}
-					if (Config::ints.at("proc_selected") > 0) locate_selection = true;
-				}
-				toggle_children = -1;
-			}
-
-			if (auto find_pid = (collapse != -1 ? collapse : expand); find_pid != -1) {
-				auto collapser = rng::find(current_procs, find_pid, &proc_info::pid);
-				if (collapser != current_procs.end()) {
-					if (collapse == expand) {
-						collapser->collapsed = not collapser->collapsed;
-					}
-					else if (collapse > -1) {
-						collapser->collapsed = true;
-					}
-					else if (expand > -1) {
-						collapser->collapsed = false;
-					}
-					if (Config::ints.at("proc_selected") > 0) locate_selection = true;
-				}
-				collapse = expand = -1;
-			}
-
-			if (collapse_all != -1) {
-				toggle_tree_collapse(current_procs);
-				collapse_all = -1;
-				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
-			}
-
-			if (should_filter or not filter.empty()) filter_found = 0;
-
-			vector<tree_proc> tree_procs;
-			tree_procs.reserve(current_procs.size());
-
-			if (!pause_proc_list) {
-				for (auto& p : current_procs) {
-					if (not v_contains(found, p.ppid)) p.ppid = 0;
-				}
-			}
-
-			//? Stable sort to retain selected sorting among processes with the same parent
-			rng::stable_sort(current_procs, rng::less{}, & proc_info::ppid);
-
-			//? Auto-collapse processes with many children when entering tree mode
-			_auto_collapse_oversized(current_procs, tree_mode_change);
-
-			//? Start recursive iteration over processes with the lowest shared parent pids
-			for (auto& p : rng::equal_range(current_procs, current_procs.at(0).ppid, rng::less{}, &proc_info::ppid)) {
-				_tree_gen(p, current_procs, tree_procs, 0, false, filter, false, no_update, should_filter);
-			}
-
-			//? Recursive sort over tree structure to account for collapsed processes in the tree
-			int index = 0;
-			tree_sort(tree_procs, sorting, reverse, (pause_proc_list and not (sorted_change or tree_mode_change)), index, current_procs.size());
-
-			//? Recursive construction of ASCII tree prefixes.
-			for (auto t = tree_procs.begin(); t != tree_procs.end(); ++t) {
-				_collect_prefixes(*t, t == tree_procs.end() - 1);
-			}
-
-			//? Final sort based on tree index
-			rng::stable_sort(current_procs, rng::less {}, &proc_info::tree_index);
-
-			//? Move current selection/view to the selected process when collapsing/expanding in the tree
-			if (locate_selection) {
-				int loc = rng::find(current_procs, Proc::selected_pid, &proc_info::pid)->tree_index;
-				if (Config::ints.at("proc_start") >= loc or Config::ints.at("proc_start") <= loc - Proc::select_max)
-					Config::ints.at("proc_start") = max(0, loc - 1);
-				Config::ints.at("proc_selected") = loc - Config::ints.at("proc_start") + 1;
-			}
-		}
-
-		numpids = (int)current_procs.size() - filter_found;
-
 		return current_procs;
 	}
+
 }
 
 namespace Tools {

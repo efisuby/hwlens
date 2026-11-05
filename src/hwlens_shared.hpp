@@ -488,7 +488,15 @@ namespace Proc {
 	extern detail_container detailed;
 
 	//* Collect and sort process information from /proc
+	//* Collects processes, no_update reuses the last process list. Does not filter or sort.
 	auto collect(bool no_update = false) -> vector<proc_info>&;
+
+	//* True when the last collect() read new data from /proc
+	extern bool collected_new;
+
+	//* Filter, sort and build the tree view of <procs> from the proc_* settings.
+	//* <fresh> tells that <procs> holds new data since the last call.
+	void arrange(vector<proc_info>& procs, bool fresh);
 
 	//* Update current selection and view, returns -1 if no change otherwise the current selection
 	int selection(const std::string_view cmd_key);

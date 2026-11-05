@@ -157,6 +157,157 @@ bool set_priority(pid_t pid, int priority) {
   return false;
 }
 
+	atomic<int> numpids{};
+	int filter_found{};
+	int collapse = -1, expand = -1, toggle_children = -1, collapse_all = -1;
+
+	//? Ordering state of the last arrange() call
+	static string current_sort;
+	static string current_filter;
+	static bool current_rev{};
+	static bool is_tree_mode{};
+
+	void arrange(vector<proc_info>& procs, bool fresh) {
+		const auto& sorting = Config::getS("proc_sorting");
+		const auto reverse = Config::getB("proc_reversed");
+		const auto& filter = Config::getS("proc_filter");
+		const auto tree = Config::getB("proc_tree");
+		const auto pause_proc_list = Config::getB("pause_proc_list");
+		//? Ordering only, without new data aggregated values must not be added again
+		const bool no_update = not fresh;
+
+		bool should_filter = current_filter != filter;
+		if (should_filter) current_filter = filter;
+		const bool sorted_change = (sorting != current_sort or reverse != current_rev or should_filter);
+		const bool tree_mode_change = tree != is_tree_mode;
+		if (sorted_change) {
+			current_sort = sorting;
+			current_rev = reverse;
+		}
+		if (tree_mode_change) is_tree_mode = tree;
+		//? New data needs the filter applied again
+		if (fresh) should_filter = true;
+
+		if (procs.empty()) {
+			numpids = 0;
+			return;
+		}
+
+		//* Match filter if defined
+		if (should_filter) {
+			filter_found = 0;
+			for (auto& p : procs) {
+				if (not tree and not filter.empty()) {
+					if (!matches_filter(p, filter)) {
+						p.filtered = true;
+						filter_found++;
+					} else {
+						p.filtered = false;
+					}
+				} else {
+					p.filtered = false;
+				}
+			}
+		}
+
+		//* Sort processes
+		if ((sorted_change or tree_mode_change) or (not no_update and not pause_proc_list)) {
+			proc_sorter(procs, sorting, reverse, tree);
+		}
+
+		//* Generate tree view if enabled
+		if (tree and (not no_update or should_filter or sorted_change)) {
+			bool locate_selection = false;
+
+			if (toggle_children != -1) {
+				auto collapser = rng::find(procs, toggle_children, &proc_info::pid);
+				if (collapser != procs.end()){
+					for (auto& p : procs) {
+						if (p.ppid == collapser->pid) {
+							auto child = rng::find(procs, p.pid, &proc_info::pid);
+							if (child != procs.end()){
+								child->collapsed = not child->collapsed;
+							}
+						}
+					}
+					if (Config::ints.at("proc_selected") > 0) locate_selection = true;
+				}
+				toggle_children = -1;
+			}
+
+			if (auto find_pid = (collapse != -1 ? collapse : expand); find_pid != -1) {
+				auto collapser = rng::find(procs, find_pid, &proc_info::pid);
+				if (collapser != procs.end()) {
+					if (collapse == expand) {
+						collapser->collapsed = not collapser->collapsed;
+					}
+					else if (collapse > -1) {
+						collapser->collapsed = true;
+					}
+					else if (expand > -1) {
+						collapser->collapsed = false;
+					}
+					if (Config::ints.at("proc_selected") > 0) locate_selection = true;
+				}
+				collapse = expand = -1;
+			}
+
+			if (collapse_all != -1) {
+				toggle_tree_collapse(procs);
+				collapse_all = -1;
+				if (Config::ints.at("proc_selected") > 0) locate_selection = true;
+			}
+
+			if (should_filter or not filter.empty()) filter_found = 0;
+
+			vector<tree_proc> tree_procs;
+			tree_procs.reserve(procs.size());
+
+			//? Attach processes whose parent is gone to the root
+			if (!pause_proc_list) {
+				std::unordered_set<size_t> pids;
+				pids.reserve(procs.size());
+				for (const auto& p : procs) pids.insert(p.pid);
+				for (auto& p : procs) {
+					if (not pids.contains(p.ppid)) p.ppid = 0;
+				}
+			}
+
+			//? Stable sort to retain selected sorting among processes with the same parent
+			rng::stable_sort(procs, rng::less{}, & proc_info::ppid);
+
+			//? Auto-collapse processes with many children when entering tree mode
+			_auto_collapse_oversized(procs, tree_mode_change);
+
+			//? Start recursive iteration over processes with the lowest shared parent pids
+			for (auto& p : rng::equal_range(procs, procs.at(0).ppid, rng::less{}, &proc_info::ppid)) {
+				_tree_gen(p, procs, tree_procs, 0, false, filter, false, no_update, should_filter);
+			}
+
+			//? Recursive sort over tree structure to account for collapsed processes in the tree
+			int index = 0;
+			tree_sort(tree_procs, sorting, reverse, (pause_proc_list and not (sorted_change or tree_mode_change)), index, procs.size());
+
+			//? Recursive construction of ASCII tree prefixes.
+			for (auto t = tree_procs.begin(); t != tree_procs.end(); ++t) {
+				_collect_prefixes(*t, t == tree_procs.end() - 1);
+			}
+
+			//? Final sort based on tree index
+			rng::stable_sort(procs, rng::less {}, &proc_info::tree_index);
+
+			//? Move current selection/view to the selected process when collapsing/expanding in the tree
+			if (locate_selection) {
+				int loc = rng::find(procs, Proc::selected_pid, &proc_info::pid)->tree_index;
+				if (Config::ints.at("proc_start") >= loc or Config::ints.at("proc_start") <= loc - Proc::select_max)
+					Config::ints.at("proc_start") = std::max(0, loc - 1);
+				Config::ints.at("proc_selected") = loc - Config::ints.at("proc_start") + 1;
+			}
+		}
+
+		numpids = (int)procs.size() - filter_found;
+	}
+
 	void proc_sorter(vector<proc_info>& proc_vec, const string& sorting, bool reverse, bool tree) {
 		if (reverse) {
 			switch (v_index(sort_vector, sorting)) {
