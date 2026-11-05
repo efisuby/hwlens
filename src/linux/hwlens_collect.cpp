@@ -3659,8 +3659,8 @@ namespace Proc {
 						switch (x-offset) {
 							case 3: //? Process state
 								new_proc.state = short_str.at(0);
-								if (new_proc.ppid != 0) next_x = 14;
 								continue;
+							//? Read every time: an orphan is moved to a subreaper while it runs
 							case 4: //? Parent pid
 								new_proc.ppid = stoull(short_str);
 								next_x = 14;
