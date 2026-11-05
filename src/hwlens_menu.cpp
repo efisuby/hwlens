@@ -1316,7 +1316,7 @@ static int optionsMenu(const string& key) {
 			{"cpu_graph_upper", std::cref(Cpu::available_fields)},
 			{"cpu_graph_lower", std::cref(Cpu::available_fields)},
 			{"cpu_sensor", std::cref(Cpu::available_sensors)},
-			{"selected_battery", std::cref(Config::available_batteries)},
+			{"selected_battery", std::cref(Cpu::available_batteries)},
 	        {"base_10_bitrate", std::cref(Config::base_10_bitrate_values)},
 			{"disable_presets", std::cref(Config::disable_preset_options)},
 		#ifdef GPU_SUPPORT
@@ -1387,7 +1387,7 @@ static int optionsMenu(const string& key) {
 					}
 					else if (option == "cpu_core_map") {
 						atomic_wait(Runner::active);
-						Cpu::core_mapping = Cpu::get_core_mapping();
+						Cpu::core_mapping = Cpu::get_core_mapping(Config::getS("cpu_core_map"));
 					}
 				}
 				else if (selPred.test(isInt) and Config::intValid(option, editor.text)) {

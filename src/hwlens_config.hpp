@@ -29,6 +29,8 @@ using std::string;
 using std::vector;
 
 //* Functions and variables for reading and writing the hwlens config file
+namespace Shared { struct CollectOptions; }
+
 namespace Config {
 
 	extern std::filesystem::path conf_dir;
@@ -54,7 +56,6 @@ namespace Config {
 	extern vector<string> current_boxes;
 	extern vector<string> preset_list;
 	extern const vector<string> disable_preset_options;
-	extern vector<string> available_batteries;
 	extern std::optional<int> current_preset;
 
 	extern bool write_new;
@@ -135,4 +136,7 @@ namespace Config {
 
 	// Write default config to an in-memory buffer
 	[[nodiscard]] auto current_config() -> std::string;
+
+	//* Snapshot of the settings the collectors use, see Shared::CollectOptions
+	Shared::CollectOptions collect_options();
 }

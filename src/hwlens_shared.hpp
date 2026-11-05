@@ -105,6 +105,31 @@ namespace Shared {
 		while (history.size() > limit) history.pop_front();
 	}
 
+	//* Settings the collectors depend on. Collectors read only this snapshot, never Config,
+	//* so the same code can run without the TUI. The TUI refreshes it from Config every cycle.
+	struct CollectOptions {
+		//? cpu
+		string cpu_sensor, freq_mode = "first", cpu_core_map, selected_battery = "Auto";
+		bool show_coretemp = true, show_cpu_freq = true, check_temp = true, show_fans = true;
+		bool show_battery = true, show_cpu_watts = true;
+		//? gpu
+		string shown_gpus = "nvidia amd intel";
+		bool nvml_measure_pcie_speeds = true, rsmi_measure_pcie_speeds = true;
+		//? mem and disks
+		string disks_filter;
+		bool show_swap = true, swap_disk = true, show_disks = true, zfs_arc_cached = true, disk_free_priv = false;
+		bool use_fstab = true, only_physical = true, zfs_hide_datasets = false;
+		//? net
+		string net_iface;
+		bool net_sync = true, net_auto = true;
+		//? proc
+		bool proc_info_smaps = false, proc_per_core = false, proc_filter_kernel = false, show_detailed = false;
+		bool pause_proc_list = false, keep_dead_proc_usage = false, proc_show_unit = true, proc_show_vram = true;
+		size_t detailed_pid = 0;
+	};
+
+	extern CollectOptions collect_opts;
+
 }
 
 #if defined(GPU_SUPPORT)
@@ -239,6 +264,9 @@ namespace Cpu {
 	//* 'P' / 'E' per logical cpu on hybrid (performance + efficient core) CPUs, empty otherwise
 	extern vector<char> core_kinds;
 
+	//* Battery names found by the collector, "Auto" first
+	extern vector<string> available_batteries;
+
 	struct fan_info {
 		string label;
 		long long rpm = 0;
@@ -284,7 +312,7 @@ namespace Cpu {
 	);
 
 	//* Parse /proc/cpu info for mapping of core ids
-	auto get_core_mapping() -> std::unordered_map<int, int>;
+	auto get_core_mapping(const string& custom_map) -> std::unordered_map<int, int>;
 	extern std::unordered_map<int, int> core_mapping;
 
 	auto get_cpuHz() -> string;

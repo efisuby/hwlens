@@ -431,14 +431,14 @@ namespace Shared {
 		for (const auto& [sensor, ignored] : Cpu::found_sensors) {
 			Cpu::available_sensors.push_back(sensor);
 		}
-		Cpu::core_mapping = Cpu::get_core_mapping();
+		Cpu::core_mapping = Cpu::get_core_mapping(Shared::collect_opts.cpu_core_map);
 		Cpu::has_fans = Cpu::get_fans();
 
 		Cpu::container_engine = detect_container();
 
 		//? Init for namespace Gpu
 	#ifdef GPU_SUPPORT
-		auto shown_gpus = Config::getS("shown_gpus");
+		auto shown_gpus = Shared::collect_opts.shown_gpus;
 		if (shown_gpus.contains("nvidia")) {
 		    Gpu::Nvml::init();
 		}
@@ -741,14 +741,14 @@ namespace Cpu {
 	static void update_sensors() {
 		if (cpu_sensor.empty()) return;
 
-		const auto& cpu_sensor = (not Config::getS("cpu_sensor").empty() and found_sensors.contains(Config::getS("cpu_sensor")) ? Config::getS("cpu_sensor") : Cpu::cpu_sensor);
+		const auto& cpu_sensor = (not Shared::collect_opts.cpu_sensor.empty() and found_sensors.contains(Shared::collect_opts.cpu_sensor) ? Shared::collect_opts.cpu_sensor : Cpu::cpu_sensor);
 
 		found_sensors.at(cpu_sensor).temp = stol(readfile(found_sensors.at(cpu_sensor).path, "0")) / 1000;
 		current_cpu.temp.at(0).push_back(found_sensors.at(cpu_sensor).temp);
 		current_cpu.temp_max = found_sensors.at(cpu_sensor).crit;
 		Shared::trim_history(current_cpu.temp.at(0), 20);
 
-		if (Config::getB("show_coretemp") and not cpu_temp_only) {
+		if (Shared::collect_opts.show_coretemp and not cpu_temp_only) {
 			for (vector<string_view> done; const auto& sensor : core_sensors) {
 				if (v_contains(done, sensor)) continue;
 				found_sensors.at(sensor).temp = stol(readfile(found_sensors.at(sensor).path, "0")) / 1000;
@@ -791,7 +791,7 @@ namespace Cpu {
 
 		string cpuhz;
 
-		const auto &freq_mode = Config::getS("freq_mode");
+		const auto &freq_mode = Shared::collect_opts.freq_mode;
 
 		//? Average per cluster on hybrid CPUs: "P 4.9 E 3.6 GHz"
 		if (freq_mode == "clusters" and not Cpu::core_kinds.empty()) {
@@ -890,7 +890,7 @@ namespace Cpu {
 		return cpuhz;
 	}
 
-	auto get_core_mapping() -> std::unordered_map<int, int> {
+	auto get_core_mapping(const string& custom_map) -> std::unordered_map<int, int> {
 		std::unordered_map<int, int> core_map;
 		if (cpu_temp_only) return core_map;
 
@@ -940,7 +940,6 @@ namespace Cpu {
 		}
 
 		//? Apply user set custom mapping if any
-		const auto& custom_map = Config::getS("cpu_core_map");
 		if (not custom_map.empty()) {
 			try {
 				for (const auto& split : ssplit(custom_map)) {
@@ -1024,7 +1023,7 @@ namespace Cpu {
 						else if (fs::exists(bat_dir / "AC/online")) new_bat.online = bat_dir / "AC/online";
 
 						batteries[bat_dir.filename()] = new_bat;
-						Config::available_batteries.push_back(bat_dir.filename());
+						Cpu::available_batteries.push_back(bat_dir.filename());
 					}
 				}
 			}
@@ -1037,7 +1036,7 @@ namespace Cpu {
 			}
 		}
 
-		auto& battery_sel = Config::getS("selected_battery");
+		auto& battery_sel = Shared::collect_opts.selected_battery;
 
 		if (auto_sel.empty()) {
 			for (auto& [name, bat] : batteries) {
@@ -1249,7 +1248,7 @@ namespace Cpu {
 		if (Runner::stopping or (no_update and not current_cpu.cpu_percent.at("total").empty())) return current_cpu;
 		auto& cpu = current_cpu;
 
-		if (Config::getB("show_cpu_freq"))
+		if (Shared::collect_opts.show_cpu_freq)
 			cpuHz = get_cpuHz();
 
 		if (getloadavg(cpu.load_avg.data(), cpu.load_avg.size()) < 0) {
@@ -1376,10 +1375,10 @@ namespace Cpu {
 			else throw std::runtime_error(fmt::format("Cpu::collect() : {}", e.what()));
 		}
 
-		if (Config::getB("check_temp") and got_sensors)
+		if (Shared::collect_opts.check_temp and got_sensors)
 			update_sensors();
 
-		if (Config::getB("show_fans") and has_fans)
+		if (Shared::collect_opts.show_fans and has_fans)
 			update_fans();
 
 		//? Pressure stall information (kernel 4.20+, CONFIG_PSI)
@@ -1402,10 +1401,10 @@ namespace Cpu {
 			}
 		}
 
-		if (Config::getB("show_battery") and has_battery)
+		if (Shared::collect_opts.show_battery and has_battery)
 			current_bat = get_battery();
 
-		if (Config::getB("show_cpu_watts") and supports_watts)
+		if (Shared::collect_opts.show_cpu_watts and supports_watts)
 			current_cpu.usage_watts = get_cpuConsumptionWatts();
 
 		cpu.active_cpus = std::make_optional(detect_active_cpus());
@@ -1573,7 +1572,7 @@ namespace Gpu {
 				}
 
 				//? PCIe link speeds, the data collection takes >=20ms each call so they run on separate threads
-				if (gpus_slice[i].supported_functions.pcie_txrx and (Config::getB("nvml_measure_pcie_speeds") or is_init)) {
+				if (gpus_slice[i].supported_functions.pcie_txrx and (Shared::collect_opts.nvml_measure_pcie_speeds or is_init)) {
 					pcie_tx_thread = join_thread([gpus_slice, i]() {
 						unsigned int tx;
 						nvmlReturn_t result = nvmlDeviceGetPcieThroughput(devices[i], NVML_PCIE_UTIL_TX_BYTES, &tx);
@@ -1682,7 +1681,7 @@ namespace Gpu {
 				}
 
 				//? Per-process GPU memory; a process can be in both lists, so take the larger value per device
-				if (Proc::gpu_mem_supported and Config::getB("proc_show_vram")) {
+				if (Proc::gpu_mem_supported and Shared::collect_opts.proc_show_vram) {
 					std::unordered_map<size_t, uint64_t> device_mem;
 					for (auto query : {nvmlDeviceGetComputeRunningProcesses, nvmlDeviceGetGraphicsRunningProcesses}) {
 						if (query == nullptr) continue;
@@ -1707,7 +1706,7 @@ namespace Gpu {
 				// nvTimer.stop_rename_reset("Nv temp");
     			//? GPU temperature
 				if (gpus_slice[i].supported_functions.temp_info) {
-    				if (Config::getB("check_temp")) {
+    				if (Shared::collect_opts.check_temp) {
 						unsigned int temp;
 						nvmlReturn_t result = nvmlDeviceGetTemperature(devices[i], NVML_TEMPERATURE_GPU, &temp);
     					if (result != NVML_SUCCESS) {
@@ -1776,7 +1775,7 @@ namespace Gpu {
 				if constexpr(is_init) { // there doesn't seem to be a better way to do this, but this should be fine considering it's just 2 lines
 					pcie_tx_thread.join();
 					pcie_rx_thread.join();
-				} else if (gpus_slice[i].supported_functions.pcie_txrx and Config::getB("nvml_measure_pcie_speeds")) {
+				} else if (gpus_slice[i].supported_functions.pcie_txrx and Shared::collect_opts.nvml_measure_pcie_speeds) {
 					pcie_tx_thread.join();
 					pcie_rx_thread.join();
 				}
@@ -2083,7 +2082,7 @@ namespace Gpu {
 
     			//? GPU temperature
 				if (gpus_slice[i].supported_functions.temp_info) {
-    				if (Config::getB("check_temp") or is_init) {
+    				if (Shared::collect_opts.check_temp or is_init) {
 						int64_t temp;
     					result = rsmi_dev_temp_metric_get(i, RSMI_TEMP_TYPE_EDGE, RSMI_TEMP_CURRENT, &temp);
         				if (result != RSMI_STATUS_SUCCESS) {
@@ -2117,7 +2116,7 @@ namespace Gpu {
 				}
 
 				//? PCIe link speeds
-				if ((gpus_slice[i].supported_functions.pcie_txrx and Config::getB("rsmi_measure_pcie_speeds")) or is_init) {
+				if ((gpus_slice[i].supported_functions.pcie_txrx and Shared::collect_opts.rsmi_measure_pcie_speeds) or is_init) {
 					uint64_t tx, rx;
 					result = rsmi_dev_pci_throughput_get(i, &tx, &rx, nullptr);
     				if (result != RSMI_STATUS_SUCCESS) {
@@ -2583,10 +2582,10 @@ namespace Mem {
 
 	auto collect(bool no_update) -> mem_info& {
 		if (Runner::stopping or (no_update and not current_mem.percent.at("used").empty())) return current_mem;
-		auto show_swap = Config::getB("show_swap");
-		auto swap_disk = Config::getB("swap_disk");
-		auto show_disks = Config::getB("show_disks");
-		auto zfs_arc_cached = Config::getB("zfs_arc_cached");
+		auto show_swap = Shared::collect_opts.show_swap;
+		auto swap_disk = Shared::collect_opts.swap_disk;
+		auto show_disks = Shared::collect_opts.show_disks;
+		auto zfs_arc_cached = Shared::collect_opts.zfs_arc_cached;
 		auto totalMem = get_totalMem();
 		auto& mem = current_mem;
 
@@ -2676,13 +2675,13 @@ namespace Mem {
 		if (show_disks) {
 			static vector<string> ignore_list;
 			double uptime = system_uptime();
-			auto free_priv = Config::getB("disk_free_priv");
+			auto free_priv = Shared::collect_opts.disk_free_priv;
 			try {
-				auto& disks_filter = Config::getS("disks_filter");
+				auto& disks_filter = Shared::collect_opts.disks_filter;
 				bool filter_exclude = false;
-				auto use_fstab = Config::getB("use_fstab");
-				auto only_physical = Config::getB("only_physical");
-				auto zfs_hide_datasets = Config::getB("zfs_hide_datasets");
+				auto use_fstab = Shared::collect_opts.use_fstab;
+				auto only_physical = Shared::collect_opts.only_physical;
+				auto zfs_hide_datasets = Shared::collect_opts.zfs_hide_datasets;
 				auto& disks = mem.disks;
 				static std::unordered_map<string, future<pair<disk_info, int>>> disks_stats_promises;
 				ifstream diskread;
@@ -3147,9 +3146,9 @@ namespace Net {
 	auto collect(bool no_update) -> net_info& {
 		if (Runner::stopping) return empty_net;
 		auto& net = current_net;
-		auto& config_iface = Config::getS("net_iface");
-		auto net_sync = Config::getB("net_sync");
-		auto net_auto = Config::getB("net_auto");
+		auto& config_iface = Shared::collect_opts.net_iface;
+		auto net_sync = Shared::collect_opts.net_sync;
+		auto net_auto = Shared::collect_opts.net_auto;
 		auto new_timestamp = time_ms();
 
 		if (not no_update and errors < 3) {
@@ -3387,7 +3386,7 @@ namespace Proc {
 		if (pid != detailed.last_pid) {
 			detailed = {};
 			detailed.last_pid = pid;
-			detailed.skip_smaps = not Config::getB("proc_info_smaps");
+			detailed.skip_smaps = not Shared::collect_opts.proc_info_smaps;
 		}
 
 		//? Copy proc_info for process from proc vector
@@ -3395,7 +3394,7 @@ namespace Proc {
 		detailed.entry = *p_info;
 
 		//? Update cpu percent deque for process cpu graph
-		if (not Config::getB("proc_per_core")) detailed.entry.cpu_p *= Shared::coreCount;
+		if (not Shared::collect_opts.proc_per_core) detailed.entry.cpu_p *= Shared::coreCount;
 		detailed.cpu_percent.push_back(clamp((long long)round(detailed.entry.cpu_p), 0ll, 100ll));
 		Shared::trim_history(detailed.cpu_percent);
 
@@ -3484,12 +3483,12 @@ namespace Proc {
 		const auto& sorting = Config::getS("proc_sorting");
 		auto reverse = Config::getB("proc_reversed");
 		const auto& filter = Config::getS("proc_filter");
-		auto per_core = Config::getB("proc_per_core");
-		auto should_filter_kernel = Config::getB("proc_filter_kernel");
+		auto per_core = Shared::collect_opts.proc_per_core;
+		auto should_filter_kernel = Shared::collect_opts.proc_filter_kernel;
 		auto tree = Config::getB("proc_tree");
-		auto show_detailed = Config::getB("show_detailed");
-		const auto pause_proc_list = Config::getB("pause_proc_list");
-		const size_t detailed_pid = Config::getI("detailed_pid");
+		auto show_detailed = Shared::collect_opts.show_detailed;
+		const auto pause_proc_list = Shared::collect_opts.pause_proc_list;
+		const size_t detailed_pid = Shared::collect_opts.detailed_pid;
 		bool should_filter = current_filter != filter;
 		if (should_filter) current_filter = filter;
 		bool sorted_change = (sorting != current_sort or reverse != current_rev or should_filter);
@@ -3623,7 +3622,7 @@ namespace Proc {
 					if (not new_proc.cmd.empty()) new_proc.cmd.pop_back();
 
 					//? Innermost systemd unit or scope of the cgroup v2 path, e.g. "0::/system.slice/ssh.service"
-					if (Config::getB("proc_show_unit")) {
+					if (Shared::collect_opts.proc_show_unit) {
 						pread.open(d.path() / "cgroup");
 						string cgroup_line, cgroup_path;
 						while (getline(pread, cgroup_line))
@@ -3774,7 +3773,7 @@ namespace Proc {
 			}
 			//? Set correct state of dead processes if paused
 			else {
-				const bool keep_dead_proc_usage = Config::getB("keep_dead_proc_usage");
+				const bool keep_dead_proc_usage = Shared::collect_opts.keep_dead_proc_usage;
 				for (auto& r : current_procs) {
 					if (rng::find(found, r.pid) == found.end()) {
 						if (r.state != 'X') r.death_time = round(uptime) - (r.cpu_s / Shared::clkTck);

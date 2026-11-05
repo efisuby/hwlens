@@ -457,6 +457,9 @@ namespace Runner {
 			//? Atomic lock used for blocking non thread-safe actions in main thread
 			auto lck = active.lock();
 
+			//? Settings snapshot for the collectors of this cycle
+			Shared::collect_opts = Config::collect_options();
+
 			//? Set effective user if SUID bit is set
 			gain_priv powers{};
 
@@ -515,7 +518,7 @@ namespace Runner {
 
 						if (coreNum_reset) {
 							coreNum_reset = false;
-							Cpu::core_mapping = Cpu::get_core_mapping();
+							Cpu::core_mapping = Cpu::get_core_mapping(Shared::collect_opts.cpu_core_map);
 							Global::resized = true;
 							Input::interrupt();
 							continue;
@@ -960,6 +963,7 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 
 	//? Platform dependent init and error check
 	try {
+		Shared::collect_opts = Config::collect_options();
 		Shared::init();
 	}
 	catch (const std::exception& e) {

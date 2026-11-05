@@ -32,8 +32,13 @@ namespace fs = std::filesystem;
 namespace rng = std::ranges;
 using namespace Tools;
 
+namespace Shared {
+	CollectOptions collect_opts;
+}
+
 namespace Cpu {
 	vector<char> core_kinds;
+	vector<string> available_batteries = {"Auto"};
 
     std::optional<std::string> container_engine;
 

@@ -501,7 +501,6 @@ namespace Config {
 	fs::path conf_dir;
 	fs::path conf_file;
 
-	vector<string> available_batteries = {"Auto"};
 
 	vector<string> current_boxes;
 	vector<string> preset_list = {"cpu:0:default,mem:0:default,net:0:default,proc:0:default"};
@@ -931,5 +930,44 @@ namespace Config {
 			fmt::format_to(std::back_inserter(buffer), "\n");
 		}
 		return buffer;
+	}
+
+	Shared::CollectOptions collect_options() {
+		Shared::CollectOptions opts;
+		opts.cpu_core_map = getS("cpu_core_map");
+		opts.cpu_sensor = getS("cpu_sensor");
+		opts.disks_filter = getS("disks_filter");
+		opts.freq_mode = getS("freq_mode");
+		opts.net_iface = getS("net_iface");
+		opts.selected_battery = getS("selected_battery");
+		opts.shown_gpus = getS("shown_gpus");
+		opts.show_coretemp = getB("show_coretemp");
+		opts.show_cpu_freq = getB("show_cpu_freq");
+		opts.check_temp = getB("check_temp");
+		opts.show_fans = getB("show_fans");
+		opts.show_battery = getB("show_battery");
+		opts.show_cpu_watts = getB("show_cpu_watts");
+		opts.nvml_measure_pcie_speeds = getB("nvml_measure_pcie_speeds");
+		opts.rsmi_measure_pcie_speeds = getB("rsmi_measure_pcie_speeds");
+		opts.show_swap = getB("show_swap");
+		opts.swap_disk = getB("swap_disk");
+		opts.show_disks = getB("show_disks");
+		opts.zfs_arc_cached = getB("zfs_arc_cached");
+		opts.disk_free_priv = getB("disk_free_priv");
+		opts.use_fstab = getB("use_fstab");
+		opts.only_physical = getB("only_physical");
+		opts.zfs_hide_datasets = getB("zfs_hide_datasets");
+		opts.net_sync = getB("net_sync");
+		opts.net_auto = getB("net_auto");
+		opts.proc_info_smaps = getB("proc_info_smaps");
+		opts.proc_per_core = getB("proc_per_core");
+		opts.proc_filter_kernel = getB("proc_filter_kernel");
+		opts.show_detailed = getB("show_detailed");
+		opts.pause_proc_list = getB("pause_proc_list");
+		opts.keep_dead_proc_usage = getB("keep_dead_proc_usage");
+		opts.proc_show_unit = getB("proc_show_unit");
+		opts.proc_show_vram = getB("proc_show_vram");
+		opts.detailed_pid = static_cast<size_t>(getI("detailed_pid"));
+		return opts;
 	}
 }
