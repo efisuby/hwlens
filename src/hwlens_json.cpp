@@ -147,6 +147,10 @@ namespace Json {
 		}
 	}
 
+	auto dump(const json& j) -> string {
+		return j.dump(-1, ' ', false, json::error_handler_t::replace);
+	}
+
 	auto snapshot(const State& state) -> json {
 		json snap;
 		snap["v"] = schema_version;

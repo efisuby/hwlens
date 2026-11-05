@@ -81,12 +81,16 @@ target_link_libraries(libhwlens PUBLIC hwlens_core)
 add_executable(hwlens src/main.cpp)
 target_link_libraries(hwlens libhwlens hwlens_core hwlens_collect)
 
+# Daemon: socket server and process actions
+add_library(hwlens_daemon OBJECT src/hwlens_actions.cpp src/hwlens_server.cpp)
+target_link_libraries(hwlens_daemon PUBLIC hwlens_core)
+
 add_executable(hwlensd src/hwlensd.cpp)
-target_link_libraries(hwlensd hwlens_collect hwlens_core)
+target_link_libraries(hwlensd hwlens_daemon hwlens_collect hwlens_core)
 
 if(HWLENS_LTO)
   check_ipo_supported(LANGUAGES CXX)
-  set_target_properties(hwlens hwlensd libhwlens hwlens_core hwlens_collect PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
+  set_target_properties(hwlens hwlensd libhwlens hwlens_core hwlens_collect hwlens_daemon PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
 # Generate build info

@@ -43,6 +43,9 @@ namespace Json {
 	#endif
 	};
 
+	//* Serialize to one line; invalid UTF-8 (process names and command lines can hold any bytes) is replaced
+	auto dump(const json& j) -> std::string;
+
 	//* Build a snapshot from <state> and the collector globals
 	auto snapshot(const State& state) -> json;
 
