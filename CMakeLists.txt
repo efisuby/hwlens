@@ -5,7 +5,7 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-# Disable in-source builds since they would override the Makefile
+# Disable in-source builds
 if("${CMAKE_CURRENT_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
   message(FATAL_ERROR "In-source builds are not allowed")
 endif()
@@ -270,7 +270,6 @@ endif()
 
 install(TARGETS hwlens RUNTIME)
 install(FILES "hwlens.desktop" DESTINATION "share/applications")
-install(FILES "Img/icon.png" DESTINATION "share/icons/hicolor/48x48/apps" RENAME "hwlens.png")
 install(FILES "Img/icon.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME "hwlens.svg")
 install(DIRECTORY "themes" DESTINATION "share/hwlens")
 

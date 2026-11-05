@@ -47,11 +47,13 @@ stage/
 *.app
 
 # Compiled man page
-btop.1
+hwlens.1
 
 build
 bin
-btop
+/hwlens
+/build-deb/
+/dist/
 /obj/
 config.h
 .*/

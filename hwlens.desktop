@@ -1,17 +1,17 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=btop++
+Name=hwlens
 GenericName=System Monitor
 GenericName[it]=Monitor di sistema
 GenericName[zh_TW]=系統監視器
 GenericName[pt_BR]=Monitor de sistema
-Comment=Resource monitor that shows usage and stats for processor, memory, disks, network and processes
+Comment=Terminal system monitor for processor, GPU, memory, disks, network, sensors and processes
 Comment[it]=Monitoraggio delle risorse: mostra utilizzo e statistiche per CPU, dischi, rete e processi
 Comment[zh_TW]=顯示處理器、主記憶體、磁碟、網路與進程的使用與統計數據的資源監視器應用程式
 Comment[pt_BR]=Monitoramente de atividades com estatisticas e graficos por CPU, disco, rede e processos
-Icon=btop
-Exec=btop
+Icon=hwlens
+Exec=hwlens
 Terminal=true
 Categories=System;Monitor;ConsoleOnly;
 Keywords=system;process;task

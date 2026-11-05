@@ -1,0 +1,16 @@
+hwlens
+Copyright 2026 Alexander Baranovskiy
+
+This product is derived from btop++ (https://github.com/aristocratos/btop),
+Copyright 2021 Aristocratos (jakob@qvantnet.com) and btop++ contributors,
+licensed under the Apache License, Version 2.0.
+
+hwlens was forked from btop++ v1.4.8 in November 2026. Since then the
+source files have been renamed (btop_* -> hwlens_*) and modified; new
+features include hwmon fan speeds and PWM duty, a reworked GPU box with
+throttle reasons, disk temperatures, pressure stall information, hybrid
+CPU (P/E core) awareness and per-process GPU memory and systemd unit
+columns. Original copyright headers in the source files are retained.
+
+Bundled third-party code keeps its own license, see the include/ directory
+and src/linux/intel_gpu_top/.

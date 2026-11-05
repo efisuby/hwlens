@@ -1,3 +1,26 @@
+# Changelog
+
+## hwlens 0.1.0
+
+First release under the hwlens name, forked from btop++ v1.4.8.
+
+- Renamed from btop: binary `hwlens`, config `~/.config/hwlens/hwlens.conf`
+  (imported once from `~/.config/btop`), themes in `share/hwlens/themes`.
+- CPU box: FAN row with hwmon fan speeds and PWM duty (`fan2 764rpm 28%`);
+  P/E core labels on hybrid CPUs and `freq_mode = "clusters"`
+  (`P 4.9 E 3.6 GHz`); pressure stall information next to the load average;
+  RAPL energy counter wraparound fix for CPU watts.
+- GPU box: aligned CORE | MEM / IO grid, NVML fan speed, clocks event
+  (throttle) reason in the Clock row.
+- Disks: separate IO row with current read/write speeds, usage bar with the
+  percentages inside, NVMe/SATA temperature in the title row; R/W and D/U
+  labels instead of arrows.
+- Processes: per-process GPU memory (`VRAM`) and systemd unit (`Unit:`)
+  columns.
+- Packaging: `packaging/build-deb.sh` builds a local Ubuntu .deb.
+
+# btop++ history (upstream)
+
 ## v1.4.8
 
 References | Description | Author(s)
