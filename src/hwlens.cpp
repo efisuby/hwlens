@@ -108,6 +108,7 @@ namespace Global {
 	atomic<bool> quitting (false);
 	atomic<bool> should_quit (false);
 	atomic<bool> should_sleep (false);
+	atomic<bool> should_resume (false);
 	atomic<bool> _runner_started (false);
 	atomic<bool> init_conf (false);
 	atomic<bool> reload_conf (false);
@@ -261,7 +262,10 @@ static void _crash_handler(const int sig) {
 
 static void _signal_handler(const int sig) {
 	switch (sig) {
+		//? A closed terminal window (SIGHUP) or a stopped session (SIGTERM) quits like CTRL-C, so the config is saved
 		case SIGINT:
+		case SIGHUP:
+		case SIGTERM:
 			Global::should_quit = true;
 			if (Runner::active) Runner::stopping = true;
 			Input::interrupt();
@@ -276,8 +280,11 @@ static void _signal_handler(const int sig) {
 				_sleep();
 			}
 			break;
+		//? Only flag it: the terminal and the runner are reset from the main loop. A closed terminal sends
+		//? SIGCONT right after SIGHUP, and doing that work here could wait on a lock the interrupted code holds.
 		case SIGCONT:
-			_resume();
+			Global::should_resume = true;
+			Input::interrupt();
 			break;
 		case SIGWINCH:
 			Global::resized = true;
@@ -429,6 +436,7 @@ namespace Runner {
 		// sigaddset(&mask, SIGTSTP);
 		sigaddset(&mask, SIGWINCH);
 		sigaddset(&mask, SIGTERM);
+		sigaddset(&mask, SIGHUP);
 		pthread_sigmask(SIG_BLOCK, &mask, nullptr);
 
 		// TODO: On first glance it looks redudant with `Runner::active`.
@@ -983,6 +991,8 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 	//? Setup signal handlers for CTRL-C, CTRL-Z, resume and terminal resize
 	std::atexit(_exit_handler);
 	std::signal(SIGINT, _signal_handler);
+	std::signal(SIGHUP, _signal_handler);
+	std::signal(SIGTERM, _signal_handler);
 	std::signal(SIGTSTP, _signal_handler);
 	std::signal(SIGCONT, _signal_handler);
 	std::signal(SIGWINCH, _signal_handler);
@@ -1050,6 +1060,10 @@ static auto configure_tty_mode(std::optional<bool> force_tty) {
 			else if (Global::should_sleep) {
 				Global::should_sleep = false;
 				_sleep();
+			}
+			else if (Global::should_resume) {
+				Global::should_resume = false;
+				_resume();
 			}
 			//? Hot reload config from CTRL + R or SIGUSR2
 			else if (Global::reload_conf) {
