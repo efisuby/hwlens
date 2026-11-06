@@ -1791,7 +1791,7 @@ namespace Net {
 
 namespace Proc {
 	int width_p = 55, height_p = 68;
-	int min_width = 44, min_height = 16;
+	int min_width = 44, min_height = 15;
 	int x, y, width = 20, height;
 	int start, selected, select_max;
 	bool shown = true; //? redraw is defined in hwlens_shared.cpp, the collector sets it too
