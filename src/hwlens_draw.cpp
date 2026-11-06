@@ -550,6 +550,10 @@ namespace Cpu {
 	int x = 1, y = 1, width = 20, height;
 	int b_columns, b_column_size;
 	int b_x, b_y, b_width, b_height;
+	//? Width the core columns need; a wider box (to match the gpu box) gives the rest to the core graphs
+	int b_width_natural;
+	//? Room for the frequency in the info box title
+	int hz_width = 7;
 	float max_observed_pwr = 1.0f;
 
 	int graph_up_height, graph_low_height;
@@ -580,7 +584,12 @@ namespace Cpu {
 		bool show_watts = (Config::getB("show_cpu_watts") and supports_watts);
 		auto single_graph = Config::getB("cpu_single_graph");
 		bool hide_cores = show_temps and (cpu_temp_only or not Config::getB("show_coretemp"));
-		const int extra_width = (hide_cores ? max(6, 6 * b_column_size) : (b_columns == 1 && !show_temps) ? 8 : 0);
+		//? Room per core column beyond what the columns need: the core graphs take it, without graphs the core numbers
+		//? Columns start every b_width / b_columns cells: a column may grow by the difference of that step, but
+		//? not past the next column, and the last one not past the box border
+		const int spare_width = (not hide_cores and b_columns > 0)
+			? max(0, (b_width / b_columns - b_width_natural / b_columns) + min(0, b_width % b_columns - 1)) : 0;
+		const int extra_width = (hide_cores ? max(6, 6 * b_column_size) : (b_columns == 1 && !show_temps) ? 8 : 0) + (b_column_size > 0 ? spare_width : 0);
 #if defined(GPU_SUPPORT)
 		const auto& show_gpu_info = Config::getS("show_gpu_info");
 		const bool gpu_always = show_gpu_info == "On";
@@ -862,13 +871,14 @@ namespace Cpu {
 					+ Theme::c("graph_text") + "up" + Mv::r(1) + upstr;
 			}
 
-			const bool freq_range = is_in(Config::getS("freq_mode"), "range", "clusters");
-
-			//? Cpu clock and cpu meter
-			if (Config::getB("show_cpu_freq") and not cpuHz.empty())
-				out += Mv::to(b_y, b_x + b_width - (freq_range ? 20 : 10)) + Fx::ub + Theme::c("div_line")
-					+ Symbols::h_line * ((freq_range ? 17 : 7) - cpuHz.size())
-					+ Symbols::title_left + Fx::b + Theme::c("title") + cpuHz + Fx::ub + Theme::c("div_line") + Symbols::title_right;
+			//? Cpu clock and cpu meter. The text comes from hwlensd and may be longer than this client's freq_mode
+			//? expects, so it is cut to the room calcSizes() kept for it.
+			if (Config::getB("show_cpu_freq") and not cpuHz.empty()) {
+				const string hz = uresize(cpuHz, hz_width);
+				out += Mv::to(b_y, b_x + b_width - (hz_width + 3)) + Fx::ub + Theme::c("div_line")
+					+ Symbols::h_line * (hz_width - (int)ulen(hz))
+					+ Symbols::title_left + Fx::b + Theme::c("title") + hz + Fx::ub + Theme::c("div_line") + Symbols::title_right;
+			}
 
 			out += Mv::to(b_y + 1, b_x + 1) + Theme::c("main_fg") + Fx::b + "CPU " + cpu_meter(safeVal(cpu.cpu_percent, "total"s).back())
 				+ Theme::g("cpu").at(clamp(safeVal(cpu.cpu_percent, "total"s).back(), 0ll, 100ll)) + rjust(to_string(safeVal(cpu.cpu_percent, "total"s).back()), 4) + Theme::c("main_fg") + '%';
@@ -910,7 +920,7 @@ namespace Cpu {
 		};
 
 		//? Core text and graphs
-		int cx = 0, cy = 1, cc = 0, core_width = (b_column_size == 0 ? 2 : 3);
+		int cx = 0, cy = 1, cc = 0, core_width = (b_column_size == 0 ? 2 + spare_width : 3);
 		if (Shared::coreCount >= 100) core_width++;
 		for (const auto& n : iota(0, Shared::coreCount)) {
 			auto enabled = is_cpu_enabled(n);
@@ -1085,7 +1095,7 @@ namespace Cpu {
 #ifdef GPU_SUPPORT
 namespace Gpu {
 	int width_p = 100, height_p = 32;
-	int min_width = 41, min_height = 8;
+	int min_width = two_column_min_width + 2 + graph_min_width, min_height = 8;
 	int width = 41, total_height;
 	vector<int> x_vec = {}, y_vec = {}, b_height_vec = {};
 	int b_width;
@@ -2502,7 +2512,7 @@ namespace Draw {
 
 		//? Info box height depends on whether CORE and MEM / IO fit side by side at this width
 		{
-			const int info_width = clamp(Term::width / 2, Gpu::min_width, 65);
+			const int info_width = min(Gpu::max_info_width(Term::width), max(Gpu::two_column_min_width, min(Term::width / 2, 65)));
 			const bool gpu_temps = Config::getB("check_temp");
 			for (size_t i = 0; i < Gpu::gpu_supported.size() and i < Gpu::gpu_b_height_offsets.size(); ++i)
 				Gpu::gpu_b_height_offsets[i] = Gpu::info_box_rows(Gpu::gpu_supported[i], gpu_temps, info_width);
@@ -2543,13 +2553,27 @@ namespace Draw {
 		#else
 			height = max(8, (int)ceil((double)Term::height * (trim(boxes) == "cpu" ? 100 : height_p) / 100));
 		#endif
+		#ifdef GPU_SUPPORT
+			//? Grow until every core fits beside the graph instead of dropping cores. The boxes below keep their
+			//? minimum height, and each gpu box beside the cpu box is as high as the cpu box.
+			if (Mem::shown or Net::shown or Proc::shown) {
+				const int below = Proc::shown ? Proc::min_height : (Mem::shown ? Mem::min_height : 0) + (Net::shown ? Net::min_height : 0);
+				const int max_height = (Term::height - below) / (1 + Gpu::shown);
+				const int column = 8 + 6 * show_temp;
+				for (; height < max_height; ++height) {
+					const int rows = height - gpus_extra_height - fans_extra_height - 6;
+					if (rows > 0 and max(2, (int)ceil((double)Shared::coreCount / rows)) * column < width - (width / 3)) break;
+				}
+			}
+		#endif
 			x = 1;
 			y = cpu_bottom ? Term::height - height + 1 : 1;
 
 		#ifdef GPU_SUPPORT
-			b_columns = max(2, (int)ceil((double)(Shared::coreCount + 1) / (height - gpus_extra_height - fans_extra_height - 5)));
+			//? Core rows: the box minus its borders, the info box borders, the CPU row and the load average row
+			b_columns = max(2, (int)ceil((double)Shared::coreCount / max(1, height - gpus_extra_height - fans_extra_height - 6)));
 		#else
-			b_columns = max(1, (int)ceil((double)(Shared::coreCount + 1) / (height - fans_extra_height - 5)));
+			b_columns = max(1, (int)ceil((double)Shared::coreCount / max(1, height - fans_extra_height - 6)));
 		#endif
 			if (b_columns * (21 + 12 * show_temp) < width - (width / 3)) {
 				b_column_size = 2;
@@ -2563,11 +2587,32 @@ namespace Draw {
 				b_column_size = 0;
 			}
 			else {
-				b_columns = (width - width / 3) / (8 + 6 * show_temp);
+			#ifdef GPU_SUPPORT
+				//? Beside gpu boxes the info box may take everything but the shortest graph: drop cores only past that
+				const int grid_width = Gpu::shown > 0 ? max(width - width / 3, Gpu::max_info_width(Term::width)) : width - width / 3;
+			#else
+				const int grid_width = width - width / 3;
+			#endif
+				b_columns = min(b_columns, max(1, (grid_width - 1) / (8 + 6 * show_temp)));
 				b_column_size = 0;
 			}
 
 			if (b_column_size == 0) b_width = (8 + 6 * show_temp) * b_columns + 1;
+			b_width_natural = b_width;
+		#ifdef GPU_SUPPORT
+			//? As wide as the gpu info boxes below, which need two_column_min_width for their two columns:
+			//? use bigger core columns when they fit, the core graphs take what is left
+			if (Gpu::shown > 0) {
+				const int target = min(max(b_width, Gpu::two_column_min_width), Gpu::max_info_width(Term::width));
+				if (target > b_width) {
+					const int size2 = max(29, (21 + 12 * show_temp) * b_columns - (b_columns - 1));
+					const int size1 = (15 + 6 * show_temp) * b_columns - (b_columns - 1);
+					if (size2 <= target) { b_column_size = 2; b_width_natural = size2; }
+					else if (size1 <= target and b_column_size < 1) { b_column_size = 1; b_width_natural = size1; }
+					b_width = target;
+				}
+			}
+		#endif
 		#ifdef GPU_SUPPORT
 			//gpus_extra_height = max(0, gpus_extra_height - 1);
 			b_height = min(height - 2, (int)ceil((double)Shared::coreCount / b_columns) + 4 + gpus_extra_height + fans_extra_height);
@@ -2581,11 +2626,11 @@ namespace Draw {
 			box = createBox(x, y, width, height, Theme::c("cpu_box"), true, (cpu_bottom ? "" : "cpu"), (cpu_bottom ? "cpu" : ""), 1);
 
 			auto& custom = Config::getS("custom_cpu_name");
-			static const bool hasCpuHz = not Cpu::get_cpuHz().empty();
-			static const bool freq_range = is_in(Config::getS("freq_mode"), "range", "clusters");
+			const bool hasCpuHz = not Cpu::get_cpuHz().empty();
+			hz_width = max(is_in(Config::getS("freq_mode"), "range", "clusters") ? 17 : 7, (int)ulen(Cpu::get_cpuHz()));
 			const string cpu_title = uresize(
 					(custom.empty() ? Cpu::cpuName : custom),
-					b_width - (Config::getB("show_cpu_freq") and hasCpuHz ? (freq_range ? 24 : 14) : 5)
+					b_width - (Config::getB("show_cpu_freq") and hasCpuHz ? hz_width + 7 : 5)
 			);
 			box += createBox(b_x, b_y, b_width, b_height, "", false, cpu_title);
 		}
@@ -2623,7 +2668,8 @@ namespace Draw {
 				height = max(height, b_height_vec[i] + 2);
 				x_vec[i] = 1; y_vec[i] = 1 + total_height + (not Config::getB("cpu_bottom"))*Cpu::shown*Cpu::height;
 				box[i] = createBox(x_vec[i], y_vec[i], width, height, Theme::c("cpu_box"), true, std::string("gpu") + (char)(shown_panels[i]+'0'), "", (shown_panels[i]+5)%10); // TODO gpu_box
-				b_width = clamp(width/2, min_width, 65);
+				//? Beside a cpu box as wide as its info box, otherwise half the width; the graph shrinks first
+				b_width = min(Gpu::max_info_width(width), Cpu::shown ? max(Cpu::b_width, two_column_min_width) : clamp(width / 2, two_column_min_width, 65));
 				total_height += height;
 
 				//? Main statistics box

@@ -216,7 +216,13 @@ namespace Gpu {
 	enum class InfoRow { Load, Temp, Power, Fan, Clock, Used, Bus, MemClock, Pcie, Codec };
 
 	//* Info box width needed to show the CORE and MEM / IO columns side by side
-	constexpr int two_column_min_width = 65;
+	//? Info box width from which CORE and MEM / IO sit side by side: bars of 6 cells, which the PCIe and
+	//? Codec text rows need. The history graph on the left gives up width first, down to graph_min_width.
+	constexpr int two_column_min_width = 63;
+	constexpr int graph_min_width = 10;
+
+	//* Widest info box that still leaves the graph its minimum width
+	constexpr int max_info_width(int term_width) { return term_width - 2 - graph_min_width; }
 
 	auto core_rows(const gpu_info_supported& supported, bool show_temps) -> vector<InfoRow>;
 	auto mem_rows(const gpu_info_supported& supported) -> vector<InfoRow>;
