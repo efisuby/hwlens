@@ -446,7 +446,7 @@ impl Render for HwlensView {
                     Page::Overview => pages::overview(&m, cx),
                     Page::Cpu => pages::cpu(&m),
                     Page::Memory => pages::memory(&m),
-                    Page::Disks => pages::disks(&m),
+                    Page::Disks => pages::disks(&m, &self.procs.hist),
                     Page::Network => pages::network(&m),
                     Page::Gpu => pages::gpu(&m),
                     Page::Sensors => pages::sensors(&m, &self.sensor_hist),

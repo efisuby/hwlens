@@ -236,19 +236,30 @@ fn disks_brief(m: &Model) -> Div {
 }
 
 fn top_procs(name: &str, col: Rgba, procs: &[&Proc], value: impl Fn(&Proc) -> String) -> Div {
-    let wide = procs.iter().map(|p| value(p).len()).max().unwrap_or(0) > 12;
+    top_procs_cols(name, col, procs, &[""], |p| vec![value(p)])
+}
+
+/// Width of a value column: fits "1023.9 KiB/s" in the monospace font.
+const VALUE_W: f32 = 92.;
+
+/// Busiest processes with one or more value columns. Every column has a fixed width, so the
+/// rows do not shift when the numbers change length from one tick to the next.
+fn top_procs_cols(name: &str, col: Rgba, procs: &[&Proc], headers: &[&str], values: impl Fn(&Proc) -> Vec<String>) -> Div {
+    let line = || div().flex().gap_2().text_xs().font_family(MONO);
     let rows = procs.iter().map(|p| {
-        div()
-            .flex()
-            .gap_2()
-            .text_xs()
-            .font_family(MONO)
-            .child(div().w(px(64.)).text_right().text_color(color::faint()).child(p.pid.to_string()))
-            .child(div().flex_1().truncate().child(p.name.clone()))
-            .child(div().text_color(color::muted()).w(px(80.)).truncate().child(p.user.clone()))
-            .child(div().w(px(if wide { 190. } else { 84. })).text_right().child(value(p)))
+        line()
+            .child(div().w(px(64.)).flex_shrink_0().text_right().text_color(color::faint()).child(p.pid.to_string()))
+            .child(div().flex_1().min_w_0().truncate().child(p.name.clone()))
+            .child(div().text_color(color::muted()).w(px(80.)).flex_shrink_0().truncate().child(p.user.clone()))
+            .children(values(p).into_iter().map(|v| div().w(px(VALUE_W)).flex_shrink_0().text_right().whitespace_nowrap().child(v)))
     });
-    card().child(title(name.to_owned(), col)).children(rows)
+    let mut head = div().flex().items_center().child(title(name.to_owned(), col)).child(div().flex_1());
+    if headers.iter().any(|h| !h.is_empty()) {
+        head = head.children(
+            headers.iter().map(|h| div().w(px(VALUE_W)).ml_2().flex_shrink_0().text_right().text_xs().text_color(color::muted()).child(h.to_string())),
+        );
+    }
+    card().child(head).children(rows)
 }
 
 // ───────────────────────────── CPU ─────────────────────────────
@@ -406,20 +417,34 @@ pub fn memory(m: &Model) -> Div {
 
 // ───────────────────────────── Disks ─────────────────────────────
 
-pub fn disks(m: &Model) -> Div {
+pub fn disks(m: &Model, hist: &HashMap<u64, super::procs::ProcHist>) -> Div {
     let mut page = row();
     for d in m.disks.iter().filter(|d| !d.is_swap) {
         page = page.child(col().child(disk_card(d, m.cpu.psi.map(|p| p[2]))));
     }
-    let mut io: Vec<&Proc> = m.procs.iter().filter(|p| p.io_read + p.io_write > 0.0).collect();
-    io.sort_by(|a, b| (b.io_read + b.io_write).total_cmp(&(a.io_read + a.io_write)));
+    // Averages over the last ten seconds: bursty writers would otherwise blink in and out
+    // and reorder the list every tick.
+    let mut io: Vec<(&Proc, (f32, f32))> = m
+        .procs
+        .iter()
+        .filter_map(|p| Some((p, hist.get(&p.pid)?.io_avg())))
+        .filter(|(_, (r, w))| r + w > 0.0)
+        .collect();
+    io.sort_by(|a, b| (b.1.0 + b.1.1).total_cmp(&(a.1.0 + a.1.1)).then(a.0.pid.cmp(&b.0.pid)));
+    io.truncate(12);
     if m.sys.is_some() {
-        let top = if io.is_empty() {
-            card().child(title("Disk I/O by process", color::disk())).child(sub("no process is reading or writing right now"))
-        } else {
-            top_procs("Disk I/O by process", color::disk(), &io[..io.len().min(12)], |p| format!("R {} W {}", rate(p.io_read), rate(p.io_write)))
-        };
-        page = page.child(col().child(top));
+        let avg: HashMap<u64, (f32, f32)> = io.iter().map(|(p, v)| (p.pid, *v)).collect();
+        let procs: Vec<&Proc> = io.iter().map(|(p, _)| *p).collect();
+        let title_text = format!("Disk I/O by process · {} s average", super::procs::IO_WINDOW);
+        let mut top = top_procs_cols(&title_text, color::disk(), &procs, &["read", "write"], |p| {
+            let (r, w) = avg.get(&p.pid).copied().unwrap_or_default();
+            vec![rate(r), rate(w)]
+        });
+        if procs.is_empty() {
+            top = top.child(sub("no process has read or written in the last seconds"));
+        }
+        // Room for every row up front, so the card does not grow and shrink with the list.
+        page = page.child(col().child(top.min_h(px(330.))));
     }
     if m.disks.iter().all(|d| d.is_swap) {
         page = page.child(sub("hwlensd reports no disks (show_disks is off?)"));

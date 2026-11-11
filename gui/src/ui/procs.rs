@@ -18,6 +18,20 @@ pub struct ProcHist {
     pub cpu: VecDeque<f32>,
     pub mem: VecDeque<f32>,
     pub io: VecDeque<f32>,
+    /// Read and write bytes/s of the last IO_WINDOW ticks (Disks page averages).
+    pub rw: VecDeque<(f32, f32)>,
+}
+
+/// Ticks the Disks page averages per-process I/O over.
+pub const IO_WINDOW: usize = 10;
+
+impl ProcHist {
+    /// Average read and write rate over the last IO_WINDOW ticks.
+    pub fn io_avg(&self) -> (f32, f32) {
+        let n = self.rw.len().max(1) as f32;
+        let (r, w) = self.rw.iter().fold((0.0, 0.0), |(r, w), (a, b)| (r + a, w + b));
+        (r / n, w / n)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -107,6 +121,10 @@ impl ProcState {
             h.cpu.push_back(p.cpu);
             h.mem.push_back(p.mem as f32);
             h.io.push_back(p.io_read + p.io_write);
+            h.rw.push_back((p.io_read, p.io_write));
+            if h.rw.len() > IO_WINDOW {
+                h.rw.pop_front();
+            }
             if h.cpu.len() > HIST {
                 h.cpu.pop_front();
                 h.mem.pop_front();
