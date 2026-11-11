@@ -366,7 +366,20 @@ impl HwlensView {
             .border_r_1()
             .border_color(color::border())
             .child(div().px_2().py_2().text_lg().font_weight(gpui::FontWeight::BOLD).child("hwlens"))
-            .children(m.map(|m| div().px_2().pb_2().text_xs().text_color(color::muted()).child(format!("{} · {}", m.cpu.name, m.cpu.hz))))
+            // One line whatever the clock: the name is cut, the frequency has a fixed width
+            // ("800 MHz" is wider than "4.9 GHz" and used to wrap, moving the menu).
+            .children(m.map(|m| {
+                div()
+                    .flex()
+                    .gap_1()
+                    .px_2()
+                    .pb_2()
+                    .text_xs()
+                    .text_color(color::muted())
+                    .whitespace_nowrap()
+                    .child(div().flex_1().min_w_0().truncate().child(short_cpu_name(&m.cpu.name).to_owned()))
+                    .child(div().flex_shrink_0().w(px(58.)).text_right().font_family(widgets::MONO).child(m.cpu.hz.clone()))
+            }))
             .children(items)
             .child(div().flex_1())
             .child(
@@ -381,6 +394,23 @@ impl HwlensView {
                     .child(status),
             )
             .child(div().px_2().text_xs().text_color(color::faint()).child("Ctrl+1…0 pages · type to search"))
+    }
+}
+
+/// "12th Gen i9-12900K" -> "i9-12900K": the generation does not fit next to the clock.
+fn short_cpu_name(name: &str) -> &str {
+    match name.split_once(" Gen ") {
+        Some((generation, rest)) if generation.ends_with(|c: char| c.is_ascii_alphabetic()) && generation.starts_with(|c: char| c.is_ascii_digit()) => rest,
+        _ => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn short_cpu_name_drops_the_generation() {
+        assert_eq!(super::short_cpu_name("12th Gen i9-12900K"), "i9-12900K");
+        assert_eq!(super::short_cpu_name("AMD Ryzen 9 7950X"), "AMD Ryzen 9 7950X");
     }
 }
 
