@@ -1,6 +1,8 @@
 //! The window: a sidebar with live values and one page at a time.
 
 mod conns;
+mod debug;
+mod fav;
 mod history;
 mod pages;
 mod procs;
@@ -46,9 +48,10 @@ pub enum Page {
     Sensors,
     Services,
     History,
+    Debug,
 }
 
-const PAGES: [(Page, &str, &str); 11] = [
+const PAGES: [(Page, &str, &str); 12] = [
     (Page::Overview, "◎", "Overview"),
     (Page::Cpu, "▦", "CPU"),
     (Page::Memory, "▤", "Memory"),
@@ -60,6 +63,7 @@ const PAGES: [(Page, &str, &str); 11] = [
     (Page::Sensors, "♨", "Sensors"),
     (Page::Services, "⚙", "Services"),
     (Page::History, "◷", "History"),
+    (Page::Debug, "⚑", "Debug"),
 ];
 
 enum Link {
@@ -83,6 +87,9 @@ pub struct HwlensView {
     services: Services,
     svc: svc::SvcState,
     svc_scroll: UniformListScrollHandle,
+    /// Favorite keys in display order (fav.rs), saved in ~/.config/hwlens/gui.json.
+    favorites: Vec<String>,
+    debug: debug::DebugState,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     _events: Task<()>,
@@ -99,7 +106,9 @@ impl HwlensView {
         });
         let focus = cx.focus_handle();
         window.focus(&focus);
-        services.set_active(page == Page::Services);
+        let favorites = fav::load();
+        let polls_services = page == Page::Services || (page == Page::Overview && favorites.iter().any(|k| k.starts_with("svc.")));
+        services.set_active(polls_services);
         HwlensView {
             model: None,
             link: Link::Connecting,
@@ -114,6 +123,8 @@ impl HwlensView {
             services,
             svc: svc::SvcState::default(),
             svc_scroll: UniformListScrollHandle::new(),
+            favorites,
+            debug: debug::DebugState::default(),
             focus,
             scroll: UniformListScrollHandle::new(),
             _events: events,
@@ -123,6 +134,10 @@ impl HwlensView {
     fn on_event(&mut self, ev: Event, cx: &mut Context<Self>) {
         match ev {
             Event::Model(m) => {
+                self.debug.models += 1;
+                if m.tick && self.debug.models % debug::SAMPLE_TICKS == 1 {
+                    self.debug.sample();
+                }
                 if m.tick {
                     self.procs.record(&m);
                     self.record_sensors(&m);
@@ -137,6 +152,9 @@ impl HwlensView {
                 }
             }
             Event::Disconnected(why) => {
+                if matches!(self.link, Link::Up) {
+                    self.debug.reconnects += 1;
+                }
                 self.link = Link::Down(why);
                 self.history.requested = None;
             }
@@ -154,9 +172,18 @@ impl HwlensView {
         cx.notify();
     }
 
+    /// The services thread polls for the Services page, and for service favorites on the overview.
+    fn update_services_polling(&self) {
+        let fav = self.page == Page::Overview && self.favorites.iter().any(|k| k.starts_with("svc."));
+        self.services.set_active(self.page == Page::Services || fav);
+    }
+
     fn go(&mut self, page: Page, cx: &mut Context<Self>) {
+        if page != self.page {
+            self.debug.page_switches += 1;
+        }
         self.page = page;
-        self.services.set_active(page == Page::Services);
+        self.update_services_polling();
         if page == Page::History && self.model.is_some() {
             self.history_request();
         }
@@ -328,6 +355,7 @@ impl HwlensView {
                     if failed > 0 { format!("{failed} ✕") } else { String::new() }
                 }
                 Page::Overview | Page::History => String::new(),
+                Page::Debug => self.debug.last.as_ref().map(|r| format!("{:.0} M", r.rss_kb as f32 / 1024.)).unwrap_or_default(),
             }
         };
         let items = PAGES.iter().enumerate().map(|(i, &(page, icon, name))| {
@@ -415,8 +443,12 @@ mod tests {
 }
 
 impl Render for HwlensView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.debug.frames += 1;
+        let size = window.viewport_size();
+        self.debug.saw_size(f32::from(size.width), f32::from(size.height));
         let m = self.model.clone();
+        let pins = self.pins(cx);
         let root = div()
             .key_context("hwlens")
             .track_focus(&self.focus)
@@ -443,14 +475,18 @@ impl Render for HwlensView {
             Page::Services => div().flex_1().min_h(px(0.)).p_3().child(self.svc_page(cx)),
             page => {
                 let content = match page {
-                    Page::Overview => pages::overview(&m, cx),
-                    Page::Cpu => pages::cpu(&m),
-                    Page::Memory => pages::memory(&m),
-                    Page::Disks => pages::disks(&m, &self.procs.hist),
-                    Page::Network => pages::network(&m),
-                    Page::Gpu => pages::gpu(&m),
-                    Page::Sensors => pages::sensors(&m, &self.sensor_hist),
+                    Page::Overview => {
+                        let favs = self.favorites_card(&m, cx);
+                        pages::overview(&m, cx, &pins, favs)
+                    }
+                    Page::Cpu => pages::cpu(&m, &pins),
+                    Page::Memory => pages::memory(&m, &pins),
+                    Page::Disks => pages::disks(&m, &self.procs.hist, &pins),
+                    Page::Network => pages::network(&m, &pins),
+                    Page::Gpu => pages::gpu(&m, &pins),
+                    Page::Sensors => pages::sensors(&m, &self.sensor_hist, &pins),
                     Page::History => self.history_page(cx),
+                    Page::Debug => self.debug_page(cx),
                     Page::Processes | Page::Connections | Page::Services => unreachable!(),
                 };
                 div().flex_1().min_h(px(0.)).child(div().id(("page", page as usize)).size_full().overflow_y_scroll().p_3().child(content))

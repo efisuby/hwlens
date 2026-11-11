@@ -86,6 +86,12 @@ Decisions:
   with start/stop/restart/reload/enable/disable through `systemctl` (polkit asks when needed)
   and the unit's journal.
 * `packaging/build-gui-deb.sh` builds the `hwlens-gui` package (binary, desktop file, icon).
+* Favorites: ☆ next to a value on any page pins it to the overview (`gui/src/ui/fav.rs`, keys such
+  as `cpu.temp`, `hwmon.<chip>/<kind>/<label>`, `proc.<name>`, `svc.<scope>.<unit>`), saved in
+  `~/.config/hwlens/gui.json`.
+* Debug page: the client's own memory by mapping (`/proc/self/smaps`), a 10 s timeline, event
+  counters (frames, resizes, page switches, reconnects) and "Snapshot to file"
+  (`~/.cache/hwlens/gui-snapshot-*.txt`), to find what makes a long-running window grow.
 
 **6. Desktop widget.** A KDE Plasma plasmoid in QML with a small C++ plugin that
 reads the same JSON lines through `QLocalSocket`.

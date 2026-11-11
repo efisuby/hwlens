@@ -6,6 +6,7 @@ use gpui::{Context, Div, Rgba, div, prelude::*, px};
 
 use super::{
     HwlensView, Page,
+    fav::Pins,
     widgets::{Graph, MONO, avg, bar, big, segments, card, color, graph_box, last, legend, peak, stat, sub, title},
 };
 use crate::model::{CPU_FIELDS, Disk, Gpu, Model, Net, Proc, bytes, duration, rate};
@@ -31,7 +32,7 @@ fn temp_color(t: f32, max: f32) -> Rgba {
 
 // ───────────────────────────── Overview ─────────────────────────────
 
-pub fn overview(m: &Model, cx: &mut Context<HwlensView>) -> Div {
+pub fn overview(m: &Model, cx: &mut Context<HwlensView>, pins: &Pins, favorites: Div) -> Div {
     let link = |page: Page, body: Div, cx: &mut Context<HwlensView>| {
         body.id(("ov", page as usize))
             .flex_1()
@@ -106,12 +107,9 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>) -> Div {
         .flex_col()
         .gap_3()
         .child(cards)
-        .child(
-            row()
-                .child(col().child(cores_bars(m)))
-                .child(col().child(pressure_card(m)))
-                .children(m.sys.as_ref().map(|s| col().child(system_card(s, m)))),
-        )
+        .child(row().child(col().child(cores_bars(m))).child(col().child(pressure_card(m))))
+        // System and favorites share a row: each takes half the width.
+        .child(row().children(m.sys.as_ref().map(|_| col().child(system_card(m, pins)))).child(col().child(favorites)))
         .child(
             row()
                 .child(col().child(top_procs("Top CPU", color::cpu(), &top_cpu[..top_cpu.len().min(8)], |p| format!("{:.1} %", p.cpu))))
@@ -120,31 +118,26 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>) -> Div {
         )
 }
 
-fn system_card(s: &crate::model::SysInfo, m: &Model) -> Div {
-    let rate_of = |v: Option<f64>| v.map(|x| format!("{x:.0}/s")).unwrap_or_else(|| "—".into());
+fn system_card(m: &Model, pins: &Pins) -> Div {
+    let s = m.sys.as_ref().expect("system card without sys");
     let mut c = card()
-        .h_full()
         .gap_2()
         .child(title(format!("System · {}", s.hostname), color::text()))
         .child(stat("OS", s.os.clone()))
         .child(stat("Kernel", format!("{} {}", s.kernel, s.arch)))
-        .child(stat("Uptime", duration(s.uptime as i64)))
-        .child(stat("Processes", m.procs.len().to_string()))
-        .children(s.threads.map(|t| {
-            // procs_running and procs_blocked of /proc/stat count threads, not processes.
-            let sleeping = t.saturating_sub(s.procs_running + s.procs_blocked);
-            stat("Threads total / running / sleeping", format!("{t} / {} / {sleeping}", s.procs_running))
-        }))
-        .when(s.procs_blocked > 0 || s.threads.is_none(), |c| c.child(stat("Blocked on I/O (D state)", s.procs_blocked.to_string())))
-        .child(stat("Context switches", rate_of(s.ctxt_per_s)))
-        .child(stat("Interrupts", rate_of(s.intr_per_s)))
-        .child(stat("New processes", s.forks_per_s.map(|x| format!("{x:.1}/s")).unwrap_or_else(|| "—".into())));
-    // file-max is often LONG_MAX, which says nothing.
-    c = c.child(stat(
-        "Open files",
-        if s.max_files > 0 && s.max_files < 1 << 40 { format!("{} of {}", s.open_files, s.max_files) } else { s.open_files.to_string() },
-    ));
-    c
+        .child(pins.row(m, "sys.uptime", "Uptime"))
+        .child(pins.row(m, "sys.procs", "Processes"));
+    if s.threads.is_some() {
+        // procs_running and procs_blocked of /proc/stat count threads, not processes.
+        c = c.child(pins.row(m, "sys.threads", "Threads total / running / sleeping"));
+    }
+    if s.procs_blocked > 0 || s.threads.is_none() {
+        c = c.child(pins.row(m, "sys.blocked", "Blocked on I/O (D state)"));
+    }
+    c.child(pins.row(m, "sys.ctxt", "Context switches"))
+        .child(pins.row(m, "sys.intr", "Interrupts"))
+        .child(pins.row(m, "sys.forks", "New processes"))
+        .child(pins.row(m, "sys.files", "Open files"))
 }
 
 fn summary(name: &str, col: Rgba, value: String, lines: Vec<String>, g: Graph) -> Div {
@@ -270,7 +263,7 @@ fn top_procs_cols(name: &str, col: Rgba, procs: &[&Proc], headers: &[&str], valu
 
 // ───────────────────────────── CPU ─────────────────────────────
 
-pub fn cpu(m: &Model) -> Div {
+pub fn cpu(m: &Model, pins: &Pins) -> Div {
     let c = &m.cpu;
     let p = c.cores.iter().filter(|k| k.kind == 'P').count();
     let e = c.cores.iter().filter(|k| k.kind == 'E').count();
@@ -290,18 +283,18 @@ pub fn cpu(m: &Model) -> Div {
         .gap_2()
         .child(title("Processor", color::cpu()))
         .child(div().text_lg().child(c.name.clone()))
-        .child(stat("Frequency", c.hz.clone()))
+        .child(pins.row(m, "cpu.freq", "Frequency"))
         .child(stat("Threads", kinds))
-        .child(stat("Usage now / 1 min avg / peak", format!("{:.0} % / {:.0} % / {:.0} %", last(&c.total), avg(&c.total, 60), peak(&c.total, 60))))
-        .child(stat("Load average", format!("{:.2}  {:.2}  {:.2}", c.load_avg[0], c.load_avg[1], c.load_avg[2])));
-    if let Some(psi) = c.psi {
-        info = info.child(stat("CPU pressure (some avg10)", format!("{:.2} %", psi[0])));
+        .child(pins.stat("cpu.usage", "Usage now / 1 min avg / peak", format!("{:.0} % / {:.0} % / {:.0} %", last(&c.total), avg(&c.total, 60), peak(&c.total, 60))))
+        .child(pins.row(m, "cpu.load", "Load average"));
+    if c.psi.is_some() {
+        info = info.child(pins.row(m, "cpu.psi", "CPU pressure (some avg10)"));
     }
-    if let Some(w) = c.watts {
-        info = info.child(stat("Package power", format!("{w:.1} W")));
+    if c.watts.is_some() {
+        info = info.child(pins.row(m, "cpu.power", "Package power"));
     }
     if let Some(t) = c.temp {
-        info = info.child(stat("Package temperature", format!("{t:.0} °C (crit {:.0})", c.temp_max)));
+        info = info.child(pins.stat("cpu.temp", "Package temperature", format!("{t:.0} °C (crit {:.0})", c.temp_max)));
     }
 
     let mut temp_card = card().gap_2().child(title("Package temperature", color::temp()));
@@ -353,7 +346,7 @@ pub fn cpu(m: &Model) -> Div {
 
 // ───────────────────────────── Memory ─────────────────────────────
 
-pub fn memory(m: &Model) -> Div {
+pub fn memory(m: &Model, pins: &Pins) -> Div {
     let x = &m.mem;
     let t = x.total.max(1) as f32;
     let used_f = x.used as f32 / t;
@@ -380,16 +373,18 @@ pub fn memory(m: &Model) -> Div {
                 .child(legend(color::row_alt(), "free", bytes(x.free))),
         )
         .child(stat("Total", bytes(x.total)))
-        .child(stat("Available", format!("{} ({:.0} %)", bytes(x.available), x.available as f32 * 100. / t)));
-    if let Some(psi) = m.cpu.psi {
-        info = info.child(stat("Memory pressure (some avg10)", format!("{:.2} %", psi[1])));
+        .child(pins.row(m, "mem.used", "Used"))
+        .child(pins.row(m, "mem.available", "Available"))
+        .child(pins.row(m, "mem.cached", "Cached"));
+    if m.cpu.psi.is_some() {
+        info = info.child(pins.row(m, "mem.psi", "Memory pressure (some avg10)"));
     }
 
     let mut swap = card().gap_2().child(title("Swap", color::warn()));
     if x.swap_total > 0 {
         let f = x.swap_used as f32 / x.swap_total as f32;
         swap = swap
-            .child(stat("Used", format!("{} of {} ({:.0} %)", bytes(x.swap_used), bytes(x.swap_total), f * 100.)))
+            .child(pins.row(m, "mem.swap", "Used"))
             .child(bar(f, color::level(f * 100., 50., 80.)))
             .child(graph_box(Graph::percent().series(&x.swap_hist, color::warn()).grid(), 90., None));
     } else {
@@ -423,10 +418,10 @@ pub fn memory(m: &Model) -> Div {
 
 // ───────────────────────────── Disks ─────────────────────────────
 
-pub fn disks(m: &Model, hist: &HashMap<u64, super::procs::ProcHist>) -> Div {
+pub fn disks(m: &Model, hist: &HashMap<u64, super::procs::ProcHist>, pins: &Pins) -> Div {
     let mut page = row();
     for d in m.disks.iter().filter(|d| !d.is_swap) {
-        page = page.child(col().child(disk_card(d, m.cpu.psi.map(|p| p[2]))));
+        page = page.child(col().child(disk_card(d, m, pins)));
     }
     // Averages over the last ten seconds: bursty writers would otherwise blink in and out
     // and reorder the list every tick.
@@ -458,7 +453,9 @@ pub fn disks(m: &Model, hist: &HashMap<u64, super::procs::ProcHist>) -> Div {
     page
 }
 
-fn disk_card(d: &Disk, io_psi: Option<f32>) -> Div {
+fn disk_card(d: &Disk, m: &Model, pins: &Pins) -> Div {
+    let io_psi = m.cpu.psi.map(|p| p[2]);
+    let key = |what: &str| format!("disk.{}.{what}", d.mount);
     let io = Graph::new().min_max(64. * 1024.).grid().series(&d.read, color::down()).series(&d.write, color::up());
     let scale = io.scale(400.);
     let mut head = div()
@@ -474,7 +471,7 @@ fn disk_card(d: &Disk, io_psi: Option<f32>) -> Div {
     let mut c = card().gap_2().child(head);
     if !d.is_swap && d.total > 0 {
         c = c
-            .child(stat("Used", format!("{} of {} · free {}", bytes(d.used), bytes(d.total), bytes(d.free))))
+            .child(pins.row(m, &key("used"), "Used"))
             .child(bar(d.used_percent / 100., color::level(d.used_percent, 75., 90.)));
     }
     if !d.read.is_empty() {
@@ -490,28 +487,32 @@ fn disk_card(d: &Disk, io_psi: Option<f32>) -> Div {
             )
             .child(graph_box(io, 90., Some(rate(scale))))
             .child(graph_box(Graph::percent().series(&d.activity, color::disk()), 40., Some("busy 100 %".into())))
+            .child(pins.row(m, &key("io"), "Read / write now"))
             .child(stat("Peak (last min) read / write", format!("{} / {}", rate(peak(&d.read, 60)), rate(peak(&d.write, 60)))));
+        if d.temp.is_some() {
+            c = c.child(pins.row(m, &key("temp"), "Temperature"));
+        }
     }
-    if let Some(p) = io_psi.filter(|_| d.mount == "/") {
-        c = c.child(stat("System I/O pressure (some avg10)", format!("{p:.2} %")));
+    if io_psi.is_some() && d.mount == "/" {
+        c = c.child(pins.row(m, "mem.io_psi", "System I/O pressure (some avg10)"));
     }
     c
 }
 
 // ───────────────────────────── Network ─────────────────────────────
 
-pub fn network(m: &Model) -> Div {
+pub fn network(m: &Model, pins: &Pins) -> Div {
     let mut nets: Vec<&Net> = m.nets.iter().collect();
     let sel = m.net_selected.as_deref();
     nets.sort_by_key(|n| (Some(n.iface.as_str()) != sel, !n.connected, n.iface == "lo", n.iface.clone()));
     let mut page = row();
     for n in nets {
-        page = page.child(col().child(net_card(n, Some(n.iface.as_str()) == sel)));
+        page = page.child(col().child(net_card(n, Some(n.iface.as_str()) == sel, m, pins)));
     }
     page
 }
 
-fn net_card(n: &Net, selected: bool) -> Div {
+fn net_card(n: &Net, selected: bool, m: &Model, pins: &Pins) -> Div {
     let g = Graph::new().min_max(1024.).grid().series(&n.down, color::down()).series(&n.up, color::up());
     let scale = g.scale(400.);
     let dot = if n.connected { color::mem() } else { color::faint() };
@@ -536,7 +537,8 @@ fn net_card(n: &Net, selected: bool) -> Div {
                 .child(legend(color::up(), "↑", rate(last(&n.up)))),
         )
         .child(graph_box(g, 100., Some(rate(scale))))
-        .child(stat("Total ↓ / ↑", format!("{} / {}", bytes(n.down_total), bytes(n.up_total))))
+        .child(pins.row(m, &format!("net.{}.rate", n.iface), "Now ↓ / ↑"))
+        .child(pins.row(m, &format!("net.{}.total", n.iface), "Total ↓ / ↑"))
         .child(stat("Top ↓ / ↑", format!("{} / {}", rate(n.down_top as f32), rate(n.up_top as f32))))
         .child(stat("Avg (last min) ↓ / ↑", format!("{} / {}", rate(avg(&n.down, 60)), rate(avg(&n.up, 60)))));
     if !n.ipv6.is_empty() {
@@ -547,18 +549,19 @@ fn net_card(n: &Net, selected: bool) -> Div {
 
 // ───────────────────────────── GPU ─────────────────────────────
 
-pub fn gpu(m: &Model) -> Div {
+pub fn gpu(m: &Model, pins: &Pins) -> Div {
     if m.gpus.is_empty() {
         return div().child(sub("No supported GPU (shown_gpus, or hwlensd was built without GPU support)"));
     }
     let mut page = div().flex().flex_col().gap_3();
-    for g in &m.gpus {
-        page = page.child(gpu_section(g, m));
+    for (i, g) in m.gpus.iter().enumerate() {
+        page = page.child(gpu_section(i, g, m, pins));
     }
     page
 }
 
-fn gpu_section(g: &Gpu, m: &Model) -> Div {
+fn gpu_section(i: usize, g: &Gpu, m: &Model, pins: &Pins) -> Div {
+    let key = |what: &str| format!("gpu.{i}.{what}");
     let opt = |v: Option<u64>, unit: &str| v.map(|x| format!("{x}{unit}")).unwrap_or_else(|| "—".into());
     let small = |name: &str, col: Rgba, now: String, gr: Graph| {
         card()
@@ -568,23 +571,16 @@ fn gpu_section(g: &Gpu, m: &Model) -> Div {
             .child(div().flex().child(title(name.to_owned(), col)).child(div().flex_1()).child(div().text_sm().font_family(MONO).child(now)))
             .child(graph_box(gr.grid(), 90., None))
     };
-    let vram_pct = if g.mem_total > 0 { g.mem_used as f32 * 100. / g.mem_total as f32 } else { 0. };
 
     let mut stats = card()
         .gap_2()
         .child(title("Details", color::gpu()))
-        .child(stat("Core / memory clock", format!("{} / {}", opt(g.clock_mhz, " MHz"), opt(g.mem_clock_mhz, " MHz"))))
-        .child(stat("VRAM", format!("{} of {} ({vram_pct:.0} %)", bytes(g.mem_used), bytes(g.mem_total))))
-        .child(stat(
-            "Power",
-            match (g.power, g.power_max) {
-                (Some(p), Some(mx)) => format!("{p:.1} W of {mx:.0} W"),
-                (Some(p), None) => format!("{p:.1} W"),
-                _ => "—".into(),
-            },
-        ))
-        .child(stat("Temperature", g.temp.map(|t| format!("{t:.0} °C (max {:.0})", g.temp_max)).unwrap_or_else(|| "—".into())))
-        .child(stat("Fan", opt(g.fan, " %")))
+        .child(pins.row(m, &key("load"), "Load"))
+        .child(pins.row(m, &key("clock"), "Core / memory clock"))
+        .child(pins.row(m, &key("vram"), "VRAM"))
+        .child(pins.row(m, &key("power"), "Power"))
+        .child(pins.stat(&key("temp"), "Temperature", g.temp.map(|t| format!("{t:.0} °C (max {:.0})", g.temp_max)).unwrap_or_else(|| "—".into())))
+        .child(pins.row(m, &key("fan"), "Fan"))
         .child(stat("Performance state", g.pstate.map(|p| format!("P{p}")).unwrap_or_else(|| "—".into())))
         .child(stat("Encoder / decoder", format!("{} / {}", opt(g.encoder, " %"), opt(g.decoder, " %"))))
         .child(stat(
@@ -652,7 +648,7 @@ fn kind_title(kind: &str) -> &'static str {
     }
 }
 
-pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
+pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>, pins: &Pins) -> Div {
     let c = &m.cpu;
     let temp_row = |name: String, t: f32, max: f32| {
         div()
@@ -802,11 +798,13 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
             }
             let limit = s.crit.or(s.max).map(|l| format!(" / {}", s.format(l))).unwrap_or_default();
             div()
+                .group("pin")
                 .flex()
                 .items_center()
                 .gap_2()
                 .text_xs()
-                .child(div().w(px(140.)).flex_shrink_0().truncate().text_color(color::muted()).child(s.label.clone()))
+                .child(pins.toggle(format!("hwmon.{}", s.key())))
+                .child(div().w(px(130.)).flex_shrink_0().truncate().text_color(color::muted()).child(s.label.clone()))
                 .child(div().flex_1().min_w(px(40.)).child(graph_box(g, 16., None)))
                 .child(div().w(px(130.)).flex_shrink_0().text_right().font_family(MONO).child(format!("{}{limit}", s.format(s.value))))
         });

@@ -440,7 +440,7 @@ impl HwlensView {
                     cx.notify();
                 })),
             ))
-            .child(big(p.name.clone()).text_lg())
+            .child(div().flex().items_center().gap_2().child(big(p.name.clone()).text_lg()).child(div().flex_1()).child(self.pins(cx).button(format!("proc.{}", p.name))))
             .child(div().text_xs().font_family(MONO).text_color(color::muted()).line_clamp(4).child(SharedString::from(p.cmd.clone())))
             .child(stat("PID / parent", format!("{pid} / {parent}")))
             .child(stat("Children", children.to_string()))

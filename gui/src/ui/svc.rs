@@ -310,6 +310,8 @@ impl HwlensView {
         if u.active == "failed" {
             actions = actions.child(action("sv-reset", "Reset failed", "reset-failed", color::text(), cx));
         }
+        let pin_key = format!("svc.{}.{}", u.scope.name(), u.name);
+        actions = actions.child(self.pins(cx).button(pin_key));
         actions = actions.child(
             button("sv-close", "Close", color::muted()).on_click(cx.listener(|this, _, _, cx| {
                 this.svc.selected = None;
