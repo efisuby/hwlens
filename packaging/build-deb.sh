@@ -84,6 +84,10 @@ PRERM
 cat > "$STAGE/DEBIAN/postrm" <<'POSTRM'
 #!/bin/sh
 set -e
+# The minute history (StateDirectory=hwlensd) goes only on purge
+if [ "$1" = purge ]; then
+	rm -rf /var/lib/hwlensd
+fi
 if [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
 fi

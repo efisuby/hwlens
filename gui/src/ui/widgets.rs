@@ -140,11 +140,18 @@ pub struct Graph {
     pub step: f32,
     /// Stretch the longest series over the whole width (short histories).
     pub fit: bool,
+    /// A vertical line at this fraction of the width (a selected moment).
+    pub marker: Option<f32>,
+    /// Receives the painted bounds, so clicks can be mapped to a position.
+    pub track: Option<Tracked>,
 }
+
+/// Bounds of a painted element, written during paint and read by mouse handlers.
+pub type Tracked = std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>;
 
 impl Graph {
     pub fn new() -> Self {
-        Graph { series: Vec::new(), max: None, min_max: 1.0, stacked: false, grid: false, line: true, step: 2.0, fit: false }
+        Graph { series: Vec::new(), max: None, min_max: 1.0, stacked: false, grid: false, line: true, step: 2.0, fit: false, marker: None, track: None }
     }
     pub fn percent() -> Self {
         Graph { max: Some(100.0), ..Graph::new() }
@@ -174,6 +181,14 @@ impl Graph {
         self.fit = true;
         self
     }
+    pub fn marker(mut self, at: Option<f32>) -> Self {
+        self.marker = at;
+        self
+    }
+    pub fn track(mut self, t: Tracked) -> Self {
+        self.track = Some(t);
+        self
+    }
 
     /// The scale the graph would use for a given width (for an axis label).
     pub fn scale(&self, width_px: f32) -> f32 {
@@ -197,6 +212,9 @@ impl Graph {
             |_, _, _| {},
             move |bounds, (), window, _: &mut App| {
                 let mut this = self;
+                if let Some(t) = &this.track {
+                    t.set(Some(bounds));
+                }
                 let w = f32::from(bounds.size.width);
                 if this.fit {
                     let longest = this.series.iter().map(|(v, _)| v.len()).max().unwrap_or(0);
@@ -267,6 +285,10 @@ impl Graph {
                             base[off + i] = v;
                         }
                     }
+                }
+                if let Some(f) = this.marker {
+                    let x = bounds.left() + px((f.clamp(0.0, 1.0) * w).round());
+                    window.paint_quad(fill(gpui::Bounds::new(point(x, bounds.top()), size(px(1.), bounds.size.height)), color::text()));
                 }
             },
         )

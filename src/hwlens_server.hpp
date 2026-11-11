@@ -55,6 +55,8 @@ namespace Server {
 		std::function<void(bool no_update)> on_collect;
 		//* Snapshot of the collected state
 		std::function<Json::json()> on_snapshot;
+		//* Answer to a "history" request body; unset: the request is refused
+		std::function<Json::json(const Json::json&)> on_history;
 
 		//* Serve until <quit> is set by a signal handler
 		void run(const volatile std::sig_atomic_t& quit);

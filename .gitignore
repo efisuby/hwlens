@@ -53,6 +53,7 @@ build
 bin
 /hwlens
 /build-deb/
+/build-gui-deb/
 /dist/
 /obj/
 config.h

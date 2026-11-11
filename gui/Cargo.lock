@@ -2498,6 +2498,7 @@ dependencies = [
  "anyhow",
  "futures",
  "gpui",
+ "libc",
  "serde_json",
 ]
 

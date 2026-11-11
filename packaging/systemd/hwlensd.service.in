@@ -7,6 +7,9 @@ After=hwlensd.socket
 [Service]
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/hwlensd --log-level INFO
 Restart=on-failure
+# /var/lib/hwlensd: the long term history (history_days in hwlensd.conf)
+StateDirectory=hwlensd
+StateDirectoryMode=0750
 
 # Root, but only with the capabilities the collectors and the process actions need:
 #   DAC_READ_SEARCH  RAPL energy_uj, sensors and disks that are readable by root only

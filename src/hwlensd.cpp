@@ -24,7 +24,9 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 #include <list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +44,7 @@
 
 #include "config.h"
 #include "hwlens_extra.hpp"
+#include "hwlens_history.hpp"
 #include "hwlens_json.hpp"
 #include "hwlens_log.hpp"
 #include "hwlens_server.hpp"
@@ -70,6 +73,7 @@ namespace {
 		Json::State state;
 		Extra::Collector extra;
 		std::chrono::steady_clock::time_point last_tick{};
+		std::unique_ptr<History::Store> history;
 
 		//* Run every collector. <no_update> only re-derives state (net selection, process details).
 		void collect(bool no_update) {
@@ -99,10 +103,71 @@ namespace {
 			for (const auto& p : state.procs) pids.push_back(static_cast<long>(p.pid));
 			try {
 				state.extra = extra.collect(pids, seconds);
+				if (history and seconds > 0) history->add(history_tick(seconds));
 			}
 			catch (const std::exception& e) {
 				Logger::error("Extra collection failed: {}", e.what());
 			}
+		}
+
+		//* Metrics of this collection for the long term history (names in docs/protocol.md)
+		auto history_tick(double seconds) const -> History::Tick {
+			History::Tick t;
+			t.t = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+			const auto back = [](const auto& d) -> std::optional<double> {
+				return d.empty() ? std::nullopt : std::optional(static_cast<double>(d.back()));
+			};
+			auto& v = t.values;
+			const auto put = [&](const char* key, std::optional<double> x) { if (x) v[key] = *x; };
+
+			if (const auto it = state.cpu.cpu_percent.find("total"); it != state.cpu.cpu_percent.end()) put("cpu", back(it->second));
+			if (const auto it = state.cpu.cpu_percent.find("iowait"); it != state.cpu.cpu_percent.end()) put("iowait", back(it->second));
+			if (not state.cpu.temp.empty()) put("cpu_temp", back(state.cpu.temp.front()));
+			if (Cpu::supports_watts and state.cpu.usage_watts > 0) v["cpu_watts"] = state.cpu.usage_watts;
+			v["load1"] = state.cpu.load_avg[0];
+			const std::array<const char*, 3> psi{"psi_cpu", "psi_mem", "psi_io"};
+			for (size_t i = 0; i < psi.size(); i++) if (state.cpu.pressure[i] >= 0) v[psi[i]] = state.cpu.pressure[i];
+
+			if (const auto it = state.mem.percent.find("used"); it != state.mem.percent.end()) put("mem", back(it->second));
+			if (const auto it = state.mem.percent.find("swap_used"); it != state.mem.percent.end() and Mem::has_swap) put("swap", back(it->second));
+
+			double rx = 0, tx = 0;
+			for (const auto& [name, iface] : Net::current_net) {
+				if (name == "lo") continue;
+				rx += back(iface.bandwidth.at("download")).value_or(0);
+				tx += back(iface.bandwidth.at("upload")).value_or(0);
+			}
+			v["net_rx"] = rx;
+			v["net_tx"] = tx;
+
+			double dr = 0, dw = 0;
+			for (const auto& [mount, disk] : state.mem.disks) {
+				if (mount == "swap") continue;
+				dr += back(disk.io_read).value_or(0);
+				dw += back(disk.io_write).value_or(0);
+			}
+			v["disk_read"] = dr / seconds;
+			v["disk_write"] = dw / seconds;
+
+		#ifdef GPU_SUPPORT
+			if (not state.gpus.empty()) {
+				const auto& g = state.gpus.front();
+				if (const auto it = g.gpu_percent.find("gpu-totals"); it != g.gpu_percent.end()) put("gpu", back(it->second));
+				put("gpu_temp", back(g.temp));
+				if (g.pwr_usage > 0) v["gpu_watts"] = static_cast<double>(g.pwr_usage) / 1000.0;
+				if (g.mem_total > 0) v["vram"] = static_cast<double>(g.mem_used) * 100.0 / static_cast<double>(g.mem_total);
+			}
+		#endif
+
+			const auto& io = state.extra.contains("proc_io") ? state.extra.at("proc_io") : Json::json::object();
+			t.procs.reserve(state.procs.size());
+			for (const auto& p : state.procs) {
+				double pio = 0;
+				if (const auto it = io.find(std::to_string(p.pid)); it != io.end() and it->is_array() and it->size() == 2)
+					pio = it->at(0).get<double>() + it->at(1).get<double>();
+				t.procs.push_back({static_cast<long>(p.pid), p.name, p.cpu_p, static_cast<double>(p.mem), pio});
+			}
+			return t;
 		}
 
 		//* Snapshot of the current state; one shot flags are cleared once they are in a snapshot
@@ -117,6 +182,7 @@ namespace {
 	struct Settings {
 		uint64_t update_ms = 1000;
 		string log_level = "WARNING";
+		int history_days = 7;
 	};
 
 	auto read_settings(const string& path, Settings& settings) -> bool {
@@ -133,6 +199,7 @@ namespace {
 			try {
 				if (key == "update_ms") settings.update_ms = std::clamp<uint64_t>(std::stoull(value), Server::min_update_ms, Server::max_update_ms);
 				else if (key == "log_level") settings.log_level = value;
+				else if (key == "history_days") settings.history_days = std::clamp(std::stoi(value), 0, 366);
 				else Logger::warning("{}: unknown setting {}", path, key);
 			}
 			catch (const std::exception&) {
@@ -185,6 +252,7 @@ namespace {
 					 "  --socket PATH    Listen on PATH instead of the socket passed by systemd\n"
 					 "  --socket-mode M  Octal permissions of the --socket file (default 0660)\n"
 					 "  --config PATH    Settings file (default /etc/hwlens/hwlensd.conf)\n"
+					 "  --state-dir DIR  Where the history is kept (default $STATE_DIRECTORY or /var/lib/hwlensd)\n"
 					 "  --dump-json      Collect twice, one second apart, print the snapshot as JSON and exit\n"
 					 "  --log-level LVL  DISABLED, ERROR, WARNING, INFO or DEBUG, logs go to stderr\n"
 					 "  -h, --help       Show this help\n"
@@ -198,6 +266,7 @@ int main(int argc, char** argv) {
 	string socket_path;
 	mode_t socket_mode = 0660;
 	string config_path = "/etc/hwlens/hwlensd.conf";
+	string state_dir;
 	const std::vector<string_view> args(argv + 1, argv + argc);
 	for (size_t i = 0; i < args.size(); i++) {
 		const auto arg = args[i];
@@ -207,6 +276,7 @@ int main(int argc, char** argv) {
 		else if (arg == "--socket" and has_value) socket_path = args[++i];
 		else if (arg == "--socket-mode" and has_value) socket_mode = static_cast<mode_t>(std::strtoul(string{args[++i]}.c_str(), nullptr, 8) & 0777);
 		else if (arg == "--config" and has_value) config_path = args[++i];
+		else if (arg == "--state-dir" and has_value) state_dir = args[++i];
 		else if (arg == "-h" or arg == "--help") { usage(); return 0; }
 		else if (arg == "-V" or arg == "--version") { fmt::println("hwlensd version: {}", Global::Version); return 0; }
 		else {
@@ -243,6 +313,21 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 
+	if (settings.history_days > 0) {
+		if (state_dir.empty()) {
+			//? systemd sets STATE_DIRECTORY from StateDirectory=
+			const char* env = std::getenv("STATE_DIRECTORY");
+			state_dir = env != nullptr ? string(env) : "/var/lib/hwlensd";
+		}
+		std::error_code ec;
+		std::filesystem::path file;
+		if (std::filesystem::is_directory(state_dir, ec) and access(state_dir.c_str(), W_OK) == 0) file = std::filesystem::path(state_dir) / "history.jsonl";
+		else Logger::warning("History: {} is not a writable directory, keeping the history in memory only", state_dir);
+		collector.history = std::make_unique<History::Store>(file, settings.history_days);
+		const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		collector.history->load(now);
+	}
+
 	int listen_fd = -1;
 	try {
 		listen_fd = socket_path.empty() ? systemd_socket() : bind_socket(socket_path, socket_mode);
@@ -265,6 +350,12 @@ int main(int argc, char** argv) {
 	Server::Server server(listen_fd, settings.update_ms);
 	server.on_collect = [&collector](bool no_update) { collector.collect(no_update); };
 	server.on_snapshot = [&collector] { return collector.snapshot(); };
+	if (collector.history) {
+		server.on_history = [&collector](const Json::json& body) {
+			const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+			return collector.history->query(body, now);
+		};
+	}
 	Logger::info("hwlensd {} started, update interval {} ms", Global::Version, settings.update_ms);
 
 	collector.collect(false);

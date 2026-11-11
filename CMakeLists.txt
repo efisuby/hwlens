@@ -90,7 +90,7 @@ add_library(hwlens_daemon OBJECT src/hwlens_actions.cpp src/hwlens_server.cpp)
 target_link_libraries(hwlens_daemon PUBLIC hwlens_core)
 
 # Data only the daemon's other clients read: system info, hwmon sensors, I/O per process, sockets
-add_library(hwlens_extra OBJECT src/linux/hwlens_extra.cpp)
+add_library(hwlens_extra OBJECT src/linux/hwlens_extra.cpp src/hwlens_history.cpp)
 target_link_libraries(hwlens_extra PUBLIC hwlens_core)
 
 add_executable(hwlensd src/hwlensd.cpp)

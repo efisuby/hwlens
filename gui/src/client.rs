@@ -23,6 +23,10 @@ pub enum Event {
     Disconnected(String),
     /// Answer to a request, or an error the daemon reported for one.
     Reply { ok: bool, text: String },
+    /// Answer to a "history" request (docs/protocol.md), as sent.
+    History(Value),
+    /// systemd units, read by the services thread.
+    Services(crate::services::Update),
 }
 
 /// Sends requests on the current connection. Cheap to clone.
@@ -47,6 +51,10 @@ impl Requests {
 
     pub fn nice(&self, pid: u64, nice: i64) -> Result<()> {
         self.send(&json!({"nice": {"pid": pid, "nice": nice}}))
+    }
+
+    pub fn history(&self, body: Value) -> Result<()> {
+        self.send(&json!({ "history": body }))
     }
 }
 
@@ -100,6 +108,10 @@ fn session(path: &Path, writer: &Mutex<Option<UnixStream>>, tx: &UnboundedSender
                 bail!("hwlensd: {text}");
             }
             send(tx, Event::Reply { ok: false, text })?;
+            continue;
+        }
+        if msg["reply"] == "history" {
+            send(tx, Event::History(msg))?;
             continue;
         }
         if let Some(what) = msg.get("reply") {

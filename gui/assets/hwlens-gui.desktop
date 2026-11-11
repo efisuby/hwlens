@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=hwlens
+GenericName=System Monitor
+Comment=CPU, memory, disks, network, GPU, sensors, processes, services and history from hwlensd
+Exec=hwlens-gui
+Icon=hwlens-gui
+Terminal=false
+Categories=System;Monitor;
+Keywords=monitor;cpu;gpu;memory;process;task manager;systemd;sensors;
+StartupWMClass=hwlens-gui

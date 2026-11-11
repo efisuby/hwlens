@@ -216,7 +216,7 @@ fn cell(width: Option<f32>, right: bool) -> Div {
     if right { c.text_right() } else { c }
 }
 
-fn button(id: &'static str, label: &str, col: Rgba) -> Stateful<Div> {
+pub(super) fn button(id: &'static str, label: &str, col: Rgba) -> Stateful<Div> {
     div()
         .id(id)
         .px_2()

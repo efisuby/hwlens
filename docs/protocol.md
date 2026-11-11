@@ -81,6 +81,8 @@ the full snapshot, and the daemon answers with a `tick: false` message.
 | `{"net":{"reset_totals":true}}` | Toggle the zero point of the total counters of the selected interface |
 | `{"signal":{"pid":123,"signal":15}}` | Send a signal, answered with `{"reply":"signal","ok":true,"error":""}` |
 | `{"nice":{"pid":123,"nice":5}}` | Set a nice value, answered with `{"reply":"nice",...}` |
+| `{"history":{"from":T,"to":T,"points":600}}` | Long term history over a time range, see below |
+| `{"history":{"at":T}}` | The stored minute nearest to unix time `T`, with its busiest processes |
 
 Errors are answered with `{"error":"..."}`. A client is disconnected after 16 errors.
 
@@ -95,6 +97,40 @@ callers itself, using the client's uid from `SO_PEERCRED`:
 
 The daemon opens a pidfd before the checks, so a reused pid cannot redirect the signal.
 Every action and every refusal is logged.
+
+### History
+
+hwlensd keeps one sample per minute for `history_days` days (default 7, `0` turns it off) in
+`$STATE_DIRECTORY/history.jsonl` (`/var/lib/hwlensd`). A sample holds the minute's average of
+each metric, the peak CPU load and the five busiest processes by CPU (average), memory (peak)
+and disk I/O (average). Samples survive restarts; a minute without a running daemon has none.
+
+| Metric | Unit |
+|---|---|
+| `cpu`, `cpu_max`, `iowait` | percent of all CPUs (`cpu_max`: the highest tick of the minute) |
+| `mem`, `swap`, `gpu`, `vram` | percent used |
+| `cpu_temp`, `gpu_temp` | °C |
+| `cpu_watts`, `gpu_watts` | W |
+| `psi_cpu`, `psi_mem`, `psi_io` | `some avg10`, percent |
+| `load1` | 1 minute load average |
+| `net_rx`, `net_tx` | bytes/s over every interface except `lo` |
+| `disk_read`, `disk_write` | bytes/s over every disk |
+
+A range request (`from` defaults to the oldest sample, `to` to now, `points` to 600, at most
+3000) merges neighbouring minutes so that at most `points` remain. `step` is a whole number of
+minutes. Values are averages, except `*_max`, which keep the peak. A metric missing from a merged
+point is `null`.
+
+```json
+{"reply":"history","ok":true,"days":7,"oldest":1794400620,"newest":1794401220,
+ "from":1794379620,"to":1794401281,"step":60,
+ "t":[1794400620,1794400680],"series":{"cpu":[7.0,8.35],"mem":[31.4,31.5]}}
+```
+
+An `at` request answers `"sample":{"t":...,"v":{"cpu":...},"top":{"cpu":[[pid,"name",value],...],
+"mem":[...],"io":[...]}}`, or `"sample":null` when nothing is stored. Process CPU is percent of one
+core, memory is bytes, I/O is bytes/s. Errors, including a daemon with history turned off, are
+answered `{"reply":"history","ok":false,"error":"..."}`.
 
 ## Limits
 

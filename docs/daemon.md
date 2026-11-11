@@ -72,11 +72,20 @@ Decisions:
 * `cd gui && cargo build --release`; needs `libxkbcommon-x11-dev`, `libwayland-dev`, `libvulkan-dev`.
 * `vendor/xattr` patches `xattr 0.2.3` (pulled in by gpui), which uses a constant current libc dropped.
 * Pages: Overview, CPU, Memory, Disks, Network, GPU, Processes (tree, details, signals, nice),
-  Connections and Sensors (`--page NAME` opens one; Ctrl+1…9 switch).
+  Connections, Sensors, Services and History (`--page NAME` opens one; Ctrl+1…0 switch).
 * It never sends `options`: they are shared by every client and would change what the TUI shows.
   Per-process and per-sensor history is kept on the client instead.
 * hwlensd sends extra sections for it (`sys`, `hwmon`, `proc_io`, `sockets`, see protocol.md),
   collected by `Extra::Collector` in `src/linux/hwlens_extra.cpp`. The delta grows by about 7 %.
+* Long term history: hwlensd stores one sample per minute for `history_days` (default 7) in
+  `/var/lib/hwlensd/history.jsonl` (`StateDirectory=hwlensd`) and answers `history` requests
+  (`src/hwlens_history.cpp`, protocol.md). About 1.5 KB a minute, 15 MB a week. The History
+  page draws ranges from an hour to 30 days; a click shows that minute's busiest processes.
+* Services page: systemd system and user services, read by the client itself
+  (`systemctl -o json`, cgroup v2 `memory.current`, `cpu.stat`, `io.stat`, `pids.current`),
+  with start/stop/restart/reload/enable/disable through `systemctl` (polkit asks when needed)
+  and the unit's journal.
+* `packaging/build-gui-deb.sh` builds the `hwlens-gui` package (binary, desktop file, icon).
 
 **6. Desktop widget.** A KDE Plasma plasmoid in QML with a small C++ plugin that
 reads the same JSON lines through `QLocalSocket`.

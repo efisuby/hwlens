@@ -327,6 +327,12 @@ namespace Server {
 			return;
 		}
 
+		if (name == "history") {
+			send(client, Json::dump(on_history ? on_history(body)
+				: json{{"reply", "history"}, {"ok", false}, {"error", "history is disabled"}}));
+			return;
+		}
+
 		reply_error(client, fmt::format("unknown request {}", name.substr(0, max_string)));
 	}
 

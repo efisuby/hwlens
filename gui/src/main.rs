@@ -3,6 +3,7 @@
 mod client;
 mod model;
 mod patch;
+mod services;
 mod ui;
 
 use std::path::PathBuf;
@@ -54,6 +55,7 @@ fn main() {
     let Args { socket, page } = args();
     Application::new().run(move |cx: &mut App| {
         let (tx, rx) = futures::channel::mpsc::unbounded();
+        let services = services::Services::start(tx.clone());
         let requests = client::start(socket, tx);
         let bounds = Bounds::centered(None, size(px(1280.), px(900.)), cx);
         cx.open_window(
@@ -65,7 +67,7 @@ fn main() {
                 window_min_size: Some(size(px(900.), px(600.))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, page, rx, window, cx)),
+            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, services, page, rx, window, cx)),
         )
         .expect("open the window");
         cx.on_window_closed(|cx| {
