@@ -131,6 +131,7 @@ TEST(extra, stat_and_system_rates) {
 	t.write("sys/kernel/hostname", "box\n");
 	t.write("sys/kernel/osrelease", "7.0.0-42-generic\n");
 	t.write("uptime", "3600.50 100.00\n");
+	t.write("loadavg", "2.33 2.46 2.91 2/4714 136251\n");
 	t.write("sys/fs/file-nr", "12000\t0\t9223372036854775807\n");
 	t.write("etc/os-release", "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 26.04 LTS\"\n");
 
@@ -154,6 +155,7 @@ TEST(extra, stat_and_system_rates) {
 	EXPECT_EQ(j["intr_per_s"], 250.0);
 	EXPECT_EQ(j["forks_per_s"], 2.5);
 	EXPECT_EQ(j["procs_running"], 3);
+	EXPECT_EQ(j["threads"], 4714);
 }
 
 TEST(extra, proc_io_rates_skip_idle_and_new) {

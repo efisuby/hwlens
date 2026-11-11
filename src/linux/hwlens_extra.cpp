@@ -137,6 +137,18 @@ namespace Extra {
 			out["max_files"] = max;
 		}
 
+		//? "runnable/total" in the fourth field counts every thread (task) of the system
+		if (const auto load = read_line(proc / "loadavg")) {
+			std::string l1, l5, l15, tasks;
+			std::istringstream(*load) >> l1 >> l5 >> l15 >> tasks;
+			if (const auto slash = tasks.find('/'); slash != std::string::npos) {
+				try {
+					out["threads"] = std::stoull(tasks.substr(slash + 1));
+				}
+				catch (const std::exception&) {}
+			}
+		}
+
 		if (cur) {
 			out["procs_running"] = cur->running;
 			out["procs_blocked"] = cur->blocked;

@@ -36,6 +36,8 @@ pub struct SysInfo {
     pub max_files: u64,
     pub procs_running: u64,
     pub procs_blocked: u64,
+    /// Every thread of the system; None from daemons that do not report it.
+    pub threads: Option<u64>,
     pub ctxt_per_s: Option<f64>,
     pub intr_per_s: Option<f64>,
     pub forks_per_s: Option<f64>,
@@ -488,6 +490,7 @@ fn sys(v: &Value) -> Option<SysInfo> {
         max_files: u64_of(&v["max_files"]),
         procs_running: u64_of(&v["procs_running"]),
         procs_blocked: u64_of(&v["procs_blocked"]),
+        threads: v["threads"].as_u64(),
         ctxt_per_s: v["ctxt_per_s"].as_f64(),
         intr_per_s: v["intr_per_s"].as_f64(),
         forks_per_s: v["forks_per_s"].as_f64(),

@@ -129,7 +129,13 @@ fn system_card(s: &crate::model::SysInfo, m: &Model) -> Div {
         .child(stat("OS", s.os.clone()))
         .child(stat("Kernel", format!("{} {}", s.kernel, s.arch)))
         .child(stat("Uptime", duration(s.uptime as i64)))
-        .child(stat("Processes / running / blocked", format!("{} / {} / {}", m.procs.len(), s.procs_running, s.procs_blocked)))
+        .child(stat("Processes", m.procs.len().to_string()))
+        .children(s.threads.map(|t| {
+            // procs_running and procs_blocked of /proc/stat count threads, not processes.
+            let sleeping = t.saturating_sub(s.procs_running + s.procs_blocked);
+            stat("Threads total / running / sleeping", format!("{t} / {} / {sleeping}", s.procs_running))
+        }))
+        .when(s.procs_blocked > 0 || s.threads.is_none(), |c| c.child(stat("Blocked on I/O (D state)", s.procs_blocked.to_string())))
         .child(stat("Context switches", rate_of(s.ctxt_per_s)))
         .child(stat("Interrupts", rate_of(s.intr_per_s)))
         .child(stat("New processes", s.forks_per_s.map(|x| format!("{x:.1}/s")).unwrap_or_else(|| "—".into())));
