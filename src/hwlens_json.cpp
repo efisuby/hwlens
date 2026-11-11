@@ -199,6 +199,7 @@ namespace Json {
 			{"shared_percent", Gpu::shared_gpu_percent},
 		};
 	#endif
+		for (const auto& [key, value] : state.extra.items()) snap[key] = value;
 		return snap;
 	}
 

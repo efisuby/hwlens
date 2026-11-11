@@ -41,6 +41,7 @@
 #include <fmt/core.h>
 
 #include "config.h"
+#include "hwlens_extra.hpp"
 #include "hwlens_json.hpp"
 #include "hwlens_log.hpp"
 #include "hwlens_server.hpp"
@@ -67,6 +68,8 @@ namespace {
 	//* Collection state, shared by all clients
 	struct Collector {
 		Json::State state;
+		Extra::Collector extra;
+		std::chrono::steady_clock::time_point last_tick{};
 
 		//* Run every collector. <no_update> only re-derives state (net selection, process details).
 		void collect(bool no_update) {
@@ -80,9 +83,25 @@ namespace {
 				Net::collect(no_update);
 				state.procs = Proc::collect(no_update);
 				state.total_mem = Mem::get_totalMem();
+				if (not no_update) collect_extra();
 			}
 			catch (const std::exception& e) {
 				Logger::error("Collection failed: {}", e.what());
+			}
+		}
+
+		void collect_extra() {
+			const auto now = std::chrono::steady_clock::now();
+			const double seconds = last_tick == decltype(last_tick){} ? 0.0 : std::chrono::duration<double>(now - last_tick).count();
+			last_tick = now;
+			std::vector<long> pids;
+			pids.reserve(state.procs.size());
+			for (const auto& p : state.procs) pids.push_back(static_cast<long>(p.pid));
+			try {
+				state.extra = extra.collect(pids, seconds);
+			}
+			catch (const std::exception& e) {
+				Logger::error("Extra collection failed: {}", e.what());
 			}
 		}
 

@@ -46,6 +46,16 @@ to every client.
 
 Histories hold up to 600 samples.
 
+The TUI reads only the sections above. Desktop clients also read these (`src/linux/hwlens_extra.cpp`);
+a client must treat each of them as optional, since older daemons do not send them:
+
+| Section | Contents |
+|---|---|
+| `sys` | `hostname`, `os` (`PRETTY_NAME`), `kernel`, `arch`, `uptime` and `boot_time` (seconds), `open_files`, `max_files`, `procs_running`, `procs_blocked`, and from the second tick on `ctxt_per_s`, `intr_per_s`, `forks_per_s` |
+| `hwmon` | Every readable sensor under `/sys/class/hwmon`: `{chip, label, kind, value, max?, crit?}` with `kind` one of `temp` (°C), `fan` (rpm), `pwm` (%), `power` (W), `voltage` (V), `current` (A). Sorted by chip, kind and index; a repeated chip name gets ` #2`, ` #3`, ... |
+| `proc_io` | Storage I/O per process in bytes per second from `/proc/<pid>/io`: `{"<pid>": [read, write]}`, only processes with I/O in the last tick |
+| `sockets` | Refreshed every 5 ticks. `tcp_states` (count per TCP state), `udp` (count), `total`, and `list`: up to 1000 sockets of `/proc/net/{tcp,tcp6,udp,udp6}` without `TIME_WAIT`, listening first, as `{proto, local, remote, state, pid}`; `pid` is 0 when no process descriptor points at the socket |
+
 ## Deltas
 
 A delta has the shape of the snapshot and holds only the keys that changed. Apply it like this:

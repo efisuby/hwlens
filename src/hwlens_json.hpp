@@ -40,6 +40,8 @@ namespace Json {
 		Mem::mem_info mem;
 		std::vector<Proc::proc_info> procs;
 		uint64_t total_mem{};
+		//* Top level sections from Extra::Collector (sys, hwmon, proc_io, sockets); the TUI ignores them
+		json extra = json::object();
 	#ifdef GPU_SUPPORT
 		std::vector<Gpu::gpu_info> gpus;
 	#endif
