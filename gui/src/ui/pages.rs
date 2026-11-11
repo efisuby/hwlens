@@ -621,6 +621,31 @@ fn gpu_section(g: &Gpu, m: &Model) -> Div {
 
 // ───────────────────────────── Sensors ─────────────────────────────
 
+/// Cards spread over `n` columns, each going to the shortest one so far (by `weight`, about
+/// its number of rows). A wrapping row would give every card of a line the height of the tallest.
+fn masonry(cards: Vec<(usize, Div)>, n: usize) -> Div {
+    let mut cols: Vec<(usize, Vec<Div>)> = (0..n.max(1)).map(|_| (0, Vec::new())).collect();
+    for (weight, card) in cards {
+        let shortest = cols.iter_mut().min_by_key(|(h, _)| *h).expect("a column");
+        shortest.0 += weight + 2; // title and padding
+        shortest.1.push(card);
+    }
+    row().children(cols.into_iter().filter(|(_, c)| !c.is_empty()).map(|(_, c)| col().children(c)))
+}
+
+fn kind_title(kind: &str) -> &'static str {
+    match kind {
+        "temp" => "temperatures",
+        "fan" => "fans",
+        "pwm" => "fan duty",
+        "voltage" => "voltages",
+        "current" => "currents",
+        "power" => "power",
+        "energy" => "energy",
+        _ => "other",
+    }
+}
+
 pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
     let c = &m.cpu;
     let temp_row = |name: String, t: f32, max: f32| {
@@ -629,33 +654,53 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
             .items_center()
             .gap_2()
             .text_xs()
-            .child(div().w(px(150.)).truncate().text_color(color::muted()).child(name))
+            .child(div().w(px(150.)).flex_shrink_0().truncate().text_color(color::muted()).child(name))
             .child(div().flex_1().child(bar(t / max, temp_color(t, max))))
-            .child(div().w(px(56.)).text_right().font_family(MONO).child(format!("{t:.0} °C")))
+            .child(div().w(px(56.)).flex_shrink_0().text_right().font_family(MONO).child(format!("{t:.0} °C")))
     };
 
+    // Package as a bar, cores as a compact grid of tiles.
     let mut cpu_temps = card().gap_2().child(title("CPU temperatures", color::temp()));
     if let Some(t) = c.temp {
         cpu_temps = cpu_temps.child(temp_row("Package".into(), t, c.temp_max));
     }
-    for (i, k) in c.cores.iter().enumerate() {
-        if let Some(t) = k.temp {
-            let label = if k.kind == ' ' { format!("CPU {i}") } else { format!("{}-core {i}", k.kind) };
-            cpu_temps = cpu_temps.child(temp_row(label, t, c.temp_max));
-        }
-    }
+    let tiles = c.cores.iter().enumerate().filter_map(|(i, k)| {
+        let t = k.temp?;
+        let label = if k.kind == ' ' { format!("CPU {i}") } else { format!("{}{i}", k.kind) };
+        Some(
+            div()
+                .w(px(76.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .text_xs()
+                .child(
+                    div()
+                        .flex()
+                        .child(div().text_color(color::muted()).child(label))
+                        .child(div().flex_1())
+                        .child(div().font_family(MONO).text_color(temp_color(t, c.temp_max)).child(format!("{t:.0}°"))),
+                )
+                .child(segments(vec![(t / c.temp_max, temp_color(t, c.temp_max))], 4.)),
+        )
+    });
+    cpu_temps = cpu_temps.child(div().flex().flex_wrap().gap_x_3().gap_y_2().children(tiles));
 
     let mut other = card().gap_2().child(title("Other temperatures", color::temp()));
+    let mut other_n = 0;
     for d in m.disks.iter().filter(|d| d.temp.is_some()) {
         other = other.child(temp_row(format!("Disk {} ({})", d.mount, d.dev), d.temp.unwrap_or(0.), 80.));
+        other_n += 1;
     }
     for g in &m.gpus {
         if let Some(t) = g.temp {
             other = other.child(temp_row(format!("GPU {}", g.name), t, g.temp_max));
+            other_n += 1;
         }
     }
 
     let mut fans = card().gap_2().child(title("Fans", color::down()));
+    let mut fans_n = 0;
     if c.fans.is_empty() {
         fans = fans.child(sub("no fans reported"));
     }
@@ -663,32 +708,47 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
         fans = fans
             .child(stat(f.label.clone(), format!("{} rpm{}", f.rpm, f.pwm.map(|p| format!(" · PWM {p:.0} %")).unwrap_or_default())))
             .child(bar(f.pwm.unwrap_or(0.) / 100., color::down()));
+        fans_n += 2;
     }
     for g in &m.gpus {
         if let Some(f) = g.fan {
             fans = fans.child(stat(format!("GPU {}", g.name), format!("{f} %"))).child(bar(f as f32 / 100., color::gpu()));
+            fans_n += 2;
         }
     }
 
     let mut power = card().gap_2().child(title("Power", color::warn()));
+    let mut power_n = 0;
     if let Some(w) = c.watts {
         power = power.child(stat("CPU package", format!("{w:.1} W")));
+        power_n += 1;
     }
     for g in &m.gpus {
         if let Some(p) = g.power {
             power = power.child(stat(format!("GPU {}", g.name), format!("{p:.1} W")));
+            power_n += 1;
         }
     }
     if let Some(b) = &c.battery {
         power = power
             .child(stat("Battery", format!("{:.0} % · {}", b.percent, b.status)))
             .child(stat("Battery power", format!("{:.1} W", b.watts)));
+        power_n += 2;
         if b.seconds > 0 {
             power = power.child(stat("Time left", duration(b.seconds)));
         }
     }
 
-    let top = row().child(col().child(cpu_temps)).child(col().child(other).child(fans).child(power));
+    let mut summary = vec![(1 + c.cores.len().div_ceil(5), cpu_temps)];
+    if other_n > 0 {
+        summary.push((other_n, other));
+    }
+    summary.push((fans_n.max(1), fans));
+    if power_n > 0 {
+        summary.push((power_n, power));
+    }
+    let top = masonry(summary, 2);
+
     if m.hwmon.is_empty() {
         // Older daemons only name the sensors.
         let names = card()
@@ -698,16 +758,25 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
         return div().flex().flex_col().gap_3().child(top).child(names);
     }
 
-    let mut chips: Vec<(&str, Vec<&crate::model::HwSensor>)> = Vec::new();
+    // One card per chip and kind, so a big Super I/O chip does not make one endless card.
+    let mut groups: Vec<((&str, &str), Vec<&crate::model::HwSensor>)> = Vec::new();
     for s in &m.hwmon {
-        match chips.last_mut() {
-            Some((chip, list)) if *chip == s.chip => list.push(s),
-            _ => chips.push((s.chip.as_str(), vec![s])),
+        let key = (s.chip.as_str(), s.kind.as_str());
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, list)) => list.push(s),
+            None => groups.push((key, vec![s])),
         }
     }
-    let mut grid = row();
-    for (chip, list) in chips {
-        let rows = list.into_iter().map(|s| {
+    let mut cards = Vec::new();
+    let mut inactive_total = 0;
+    for ((chip, kind), list) in groups {
+        // Unconnected inputs read 0 the whole time: name them in one line instead of a row each.
+        let dead = |s: &crate::model::HwSensor| {
+            matches!(kind, "temp" | "fan") && s.value == 0.0 && hist.get(&s.key()).is_none_or(|h| h.iter().all(|v| *v == 0.0))
+        };
+        let (idle, live): (Vec<_>, Vec<_>) = list.into_iter().partition(|s| dead(s));
+        inactive_total += idle.len();
+        let rows = live.iter().map(|s| {
             let col = match s.kind.as_str() {
                 "temp" => s.crit.or(s.max).map(|lim| temp_color(s.value, lim)).unwrap_or(color::temp()),
                 "fan" | "pwm" => color::down(),
@@ -716,7 +785,7 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
                 _ => color::muted(),
             };
             let h: Vec<f32> = hist.get(&s.key()).map(|h| h.iter().copied().collect()).unwrap_or_default();
-            let mut g = Graph::new().series(&h, col).min_max(match s.kind.as_str() {
+            let mut g = Graph::new().series(&h, col).fit().min_max(match s.kind.as_str() {
                 "temp" => 10.,
                 "fan" => 500.,
                 "pwm" => 100.,
@@ -731,17 +800,30 @@ pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
                 .items_center()
                 .gap_2()
                 .text_xs()
-                .child(div().w(px(150.)).flex_shrink_0().truncate().text_color(color::muted()).child(s.label.clone()))
-                .child(div().flex_1().min_w(px(40.)).child(graph_box(g, 18., None)))
-                .child(div().w(px(150.)).flex_shrink_0().text_right().font_family(MONO).child(format!("{}{limit}", s.format(s.value))))
+                .child(div().w(px(140.)).flex_shrink_0().truncate().text_color(color::muted()).child(s.label.clone()))
+                .child(div().flex_1().min_w(px(40.)).child(graph_box(g, 16., None)))
+                .child(div().w(px(130.)).flex_shrink_0().text_right().font_family(MONO).child(format!("{}{limit}", s.format(s.value))))
         });
-        grid = grid.child(col().child(card().gap_1().child(title(chip.to_owned(), color::temp())).children(rows)));
+        let mut card = card().gap_1().child(
+            div()
+                .flex()
+                .gap_2()
+                .child(title(chip.to_owned(), color::temp()))
+                .child(div().text_xs().text_color(color::muted()).child(kind_title(kind))),
+        );
+        card = card.children(rows);
+        if !idle.is_empty() {
+            let names: Vec<&str> = idle.iter().map(|s| s.label.as_str()).collect();
+            card = card.child(div().text_xs().text_color(color::faint()).child(format!("inactive (reads 0): {}", names.join(", "))));
+        }
+        cards.push((live.len() + idle.len().div_ceil(6), card));
     }
+    let inactive = if inactive_total > 0 { format!(" · {inactive_total} inactive") } else { String::new() };
     div()
         .flex()
         .flex_col()
         .gap_3()
         .child(top)
-        .child(title(format!("All hwmon sensors · {}", m.hwmon.len()), color::muted()))
-        .child(grid)
+        .child(title(format!("All hwmon sensors · {}{inactive}", m.hwmon.len()), color::muted()))
+        .child(masonry(cards, 2))
 }
