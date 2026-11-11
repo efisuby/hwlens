@@ -17,6 +17,7 @@ pub const HIST: usize = 300;
 pub struct ProcHist {
     pub cpu: VecDeque<f32>,
     pub mem: VecDeque<f32>,
+    pub io: VecDeque<f32>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -27,6 +28,7 @@ pub enum SortKey {
     Cpu,
     Mem,
     Vram,
+    Io,
     Threads,
     Nice,
 }
@@ -42,13 +44,14 @@ const fn colm(name: &'static str, width: Option<f32>, key: Option<SortKey>, righ
     Column { name, width, key, right }
 }
 
-const COLUMNS: [Column; 10] = [
+const COLUMNS: [Column; 11] = [
     colm("PID", Some(76.), Some(SortKey::Pid), true),
     colm("Name", Some(220.), Some(SortKey::Name), false),
     colm("User", Some(96.), Some(SortKey::User), false),
     colm("CPU %", Some(64.), Some(SortKey::Cpu), true),
     colm("Memory", Some(88.), Some(SortKey::Mem), true),
     colm("VRAM", Some(80.), Some(SortKey::Vram), true),
+    colm("Disk I/O", Some(88.), Some(SortKey::Io), true),
     colm("Thr", Some(44.), Some(SortKey::Threads), true),
     colm("NI", Some(36.), Some(SortKey::Nice), true),
     colm("S", Some(24.), None, false),
@@ -103,9 +106,11 @@ impl ProcState {
             let h = self.hist.entry(p.pid).or_default();
             h.cpu.push_back(p.cpu);
             h.mem.push_back(p.mem as f32);
+            h.io.push_back(p.io_read + p.io_write);
             if h.cpu.len() > HIST {
                 h.cpu.pop_front();
                 h.mem.pop_front();
+                h.io.pop_front();
             }
         }
     }
@@ -118,6 +123,7 @@ impl ProcState {
             SortKey::Cpu => a.cpu.total_cmp(&b.cpu),
             SortKey::Mem => a.mem.cmp(&b.mem),
             SortKey::Vram => a.vram.unwrap_or(0).cmp(&b.vram.unwrap_or(0)),
+            SortKey::Io => (a.io_read + a.io_write).total_cmp(&(b.io_read + b.io_write)),
             SortKey::Threads => a.threads.cmp(&b.threads),
             SortKey::Nice => a.nice.cmp(&b.nice),
         };
@@ -342,13 +348,15 @@ impl HwlensView {
         }
         name = name.child(div().truncate().child(p.name.clone()));
 
-        let values: [(Div, Option<Rgba>); 10] = [
+        let io = p.io_read + p.io_write;
+        let values: [(Div, Option<Rgba>); 11] = [
             (div().child(pid.to_string()), Some(color::faint())),
             (name, None),
             (div().child(p.user.clone()), Some(color::muted())),
             (div().child(format!("{:.1}", p.cpu)), Some(cpu_color)),
             (div().child(if p.mem == 0 { "—".to_owned() } else { bytes(p.mem) }), None),
             (div().child(p.vram.map(bytes).unwrap_or_default()), Some(color::gpu())),
+            (div().child(if io > 0.0 { crate::model::rate(io) } else { String::new() }), Some(color::disk())),
             (div().child(p.threads.to_string()), Some(color::muted())),
             (div().child(p.nice.to_string()), Some(if p.nice != 0 { color::warn() } else { color::faint() })),
             (div().child(p.state.to_string()), Some(if p.state == 'R' { color::mem() } else { color::muted() })),
@@ -387,6 +395,8 @@ impl HwlensView {
         let hist = self.procs.hist.get(&pid);
         let cpu_hist: Vec<f32> = hist.map(|h| h.cpu.iter().copied().collect()).unwrap_or_default();
         let mem_hist: Vec<f32> = hist.map(|h| h.mem.iter().copied().collect()).unwrap_or_default();
+        let io_hist: Vec<f32> = hist.map(|h| h.io.iter().copied().collect()).unwrap_or_default();
+        let io_scale = Graph::new().min_max(64. * 1024.).series(&io_hist, color::disk()).scale(340.);
         let cpu_scale = Graph::new().min_max(10.).series(&cpu_hist, color::cpu()).scale(340.);
         let mem_peak = mem_hist.iter().copied().fold(0.0, f32::max);
         let cores = m.cpu.cores.len().max(1) as f32;
@@ -424,6 +434,17 @@ impl HwlensView {
             .child(graph_box(Graph::new().max(cpu_scale).series(&cpu_hist, color::cpu()).grid(), 70., Some(format!("{cpu_scale:.0} %"))))
             .child(stat("Memory (peak seen)", format!("{} ({})", bytes(p.mem), bytes(mem_peak as u64))))
             .child(graph_box(Graph::new().min_max(1.).series(&mem_hist, color::mem()).grid(), 70., Some(bytes(mem_peak as u64))))
+            .child(stat(
+                "Disk read / write",
+                format!("{} / {}", crate::model::rate(p.io_read), crate::model::rate(p.io_write)),
+            ))
+            .when(io_hist.iter().any(|&x| x > 0.0), |d| {
+                d.child(graph_box(
+                    Graph::new().max(io_scale).series(&io_hist, color::disk()).grid(),
+                    50.,
+                    Some(crate::model::rate(io_scale)),
+                ))
+            })
             .when_some(p.vram, |d, v| d.child(stat("VRAM", bytes(v))))
             .child(sub(format!("history since the client saw it: {} samples", cpu_hist.len())))
             .child(div().flex_1())
@@ -461,6 +482,8 @@ mod tests {
             cpu,
             mem: 0,
             vram: None,
+            io_read: 0.0,
+            io_write: 0.0,
             threads: 1,
             nice: 0,
         }

@@ -19,6 +19,78 @@ pub struct Model {
     pub gpus: Vec<Gpu>,
     pub disks: Vec<Disk>,
     pub procs: Vec<Proc>,
+    /// Sections only newer daemons send.
+    pub sys: Option<SysInfo>,
+    pub hwmon: Vec<HwSensor>,
+    pub sockets: Option<Sockets>,
+}
+
+#[derive(Default)]
+pub struct SysInfo {
+    pub hostname: String,
+    pub os: String,
+    pub kernel: String,
+    pub arch: String,
+    pub uptime: u64,
+    pub open_files: u64,
+    pub max_files: u64,
+    pub procs_running: u64,
+    pub procs_blocked: u64,
+    pub ctxt_per_s: Option<f64>,
+    pub intr_per_s: Option<f64>,
+    pub forks_per_s: Option<f64>,
+}
+
+pub struct HwSensor {
+    pub chip: String,
+    pub label: String,
+    /// temp (°C), fan (rpm), pwm (%), power (W), voltage (V), current (A).
+    pub kind: String,
+    pub value: f32,
+    pub max: Option<f32>,
+    pub crit: Option<f32>,
+}
+
+impl HwSensor {
+    pub fn key(&self) -> String {
+        format!("{}/{}/{}", self.chip, self.kind, self.label)
+    }
+
+    pub fn unit(&self) -> &'static str {
+        match self.kind.as_str() {
+            "temp" => "°C",
+            "fan" => "rpm",
+            "pwm" => "%",
+            "power" => "W",
+            "voltage" => "V",
+            "current" => "A",
+            _ => "",
+        }
+    }
+
+    pub fn format(&self, v: f32) -> String {
+        match self.kind.as_str() {
+            "voltage" | "current" => format!("{v:.3} {}", self.unit()),
+            "power" => format!("{v:.1} {}", self.unit()),
+            _ => format!("{v:.0} {}", self.unit()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Socket {
+    pub proto: String,
+    pub local: String,
+    pub remote: String,
+    pub state: String,
+    pub pid: u64,
+}
+
+pub struct Sockets {
+    pub list: Vec<Socket>,
+    pub tcp_states: Vec<(String, u64)>,
+    pub udp: u64,
+    pub total: u64,
 }
 
 /// CPU time categories of `cpu.info.cpu_percent`, in stacking order.
@@ -155,6 +227,9 @@ pub struct Proc {
     pub cpu: f32,
     pub mem: u64,
     pub vram: Option<u64>,
+    /// Storage I/O in bytes per second (newer daemons).
+    pub io_read: f32,
+    pub io_write: f32,
     pub threads: u64,
     pub nice: i64,
 }
@@ -197,7 +272,10 @@ impl Model {
             net_selected: s["net"]["selected"].as_str().map(str::to_owned),
             gpus: gpus(&s["gpu"]),
             disks: disks(&s["mem"]["info"], secs),
-            procs: procs(&s["proc"]["list"], &gpu_mem),
+            procs: procs(&s["proc"]["list"], &gpu_mem, &s["proc_io"]),
+            sys: sys(&s["sys"]),
+            hwmon: hwmon(&s["hwmon"]),
+            sockets: sockets(&s["sockets"]),
         }
     }
 
@@ -398,11 +476,76 @@ fn disks(info: &Value, secs: f32) -> Vec<Disk> {
         .collect()
 }
 
-fn procs(list: &Value, gpu_mem: &HashMap<u64, u64>) -> Vec<Proc> {
+fn sys(v: &Value) -> Option<SysInfo> {
+    v.as_object()?;
+    Some(SysInfo {
+        hostname: str_of(&v["hostname"]),
+        os: str_of(&v["os"]),
+        kernel: str_of(&v["kernel"]),
+        arch: str_of(&v["arch"]),
+        uptime: u64_of(&v["uptime"]),
+        open_files: u64_of(&v["open_files"]),
+        max_files: u64_of(&v["max_files"]),
+        procs_running: u64_of(&v["procs_running"]),
+        procs_blocked: u64_of(&v["procs_blocked"]),
+        ctxt_per_s: v["ctxt_per_s"].as_f64(),
+        intr_per_s: v["intr_per_s"].as_f64(),
+        forks_per_s: v["forks_per_s"].as_f64(),
+    })
+}
+
+fn hwmon(v: &Value) -> Vec<HwSensor> {
+    let opt = |x: &Value| x.as_f64().map(|f| f as f32);
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| HwSensor {
+                    chip: str_of(&s["chip"]),
+                    label: str_of(&s["label"]),
+                    kind: str_of(&s["kind"]),
+                    value: s["value"].as_f64().unwrap_or(0.0) as f32,
+                    max: opt(&s["max"]),
+                    crit: opt(&s["crit"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn sockets(v: &Value) -> Option<Sockets> {
+    v.as_object()?;
+    let mut tcp_states: Vec<(String, u64)> = v["tcp_states"]
+        .as_object()
+        .map(|m| m.iter().map(|(k, n)| (k.clone(), u64_of(n))).collect())
+        .unwrap_or_default();
+    tcp_states.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Some(Sockets {
+        list: v["list"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|s| Socket {
+                        proto: str_of(&s["proto"]),
+                        local: str_of(&s["local"]),
+                        remote: str_of(&s["remote"]),
+                        state: str_of(&s["state"]),
+                        pid: u64_of(&s["pid"]),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        tcp_states,
+        udp: u64_of(&v["udp"]),
+        total: u64_of(&v["total"]),
+    })
+}
+
+fn procs(list: &Value, gpu_mem: &HashMap<u64, u64>, io: &Value) -> Vec<Proc> {
     let Some(map) = list.as_object() else { return Vec::new() };
     map.values()
         .map(|p| {
             let pid = u64_of(&p["pid"]);
+            let rw = &io[pid.to_string()];
             Proc {
                 pid,
                 ppid: u64_of(&p["ppid"]),
@@ -414,6 +557,8 @@ fn procs(list: &Value, gpu_mem: &HashMap<u64, u64>) -> Vec<Proc> {
                 cpu: p["cpu_p"].as_f64().unwrap_or(0.0) as f32,
                 mem: u64_of(&p["mem"]),
                 vram: gpu_mem.get(&pid).copied(),
+                io_read: rw[0].as_f64().unwrap_or(0.0) as f32,
+                io_write: rw[1].as_f64().unwrap_or(0.0) as f32,
                 threads: u64_of(&p["threads"]),
                 nice: p["nice"].as_i64().unwrap_or(0),
             }
@@ -467,6 +612,34 @@ mod tests {
         let m = Model::from_snapshot(&s, 500);
         assert_eq!(m.disks[0].read, vec![2000.0, 4000.0]);
         assert_eq!(m.disks[0].write, vec![0.0, 1000.0]);
+    }
+
+    #[test]
+    fn extra_sections_parse() {
+        let s = json!({
+            "sys": {"hostname": "box", "uptime": 90061, "ctxt_per_s": 1500.0},
+            "hwmon": [{"chip": "nct", "label": "in0", "kind": "voltage", "value": 1.152}],
+            "sockets": {"list": [{"proto": "tcp", "local": "0.0.0.0:22", "remote": "0.0.0.0:0", "state": "LISTEN", "pid": 7}],
+                        "tcp_states": {"LISTEN": 1, "ESTABLISHED": 5}, "udp": 2, "total": 8},
+            "proc_io": {"7": [100.0, 2000.0]},
+            "proc": {"list": {"7": {"pid": 7}, "8": {"pid": 8}}}
+        });
+        let m = Model::from_snapshot(&s, 1000);
+        let sys = m.sys.unwrap();
+        assert_eq!((sys.hostname.as_str(), sys.uptime, sys.ctxt_per_s), ("box", 90061, Some(1500.0)));
+        assert_eq!(m.hwmon[0].format(m.hwmon[0].value), "1.152 V");
+        let so = m.sockets.unwrap();
+        assert_eq!(so.tcp_states[0], ("ESTABLISHED".to_string(), 5));
+        assert_eq!(so.list[0].pid, 7);
+        let p7 = m.procs.iter().find(|p| p.pid == 7).unwrap();
+        let p8 = m.procs.iter().find(|p| p.pid == 8).unwrap();
+        assert_eq!((p7.io_read, p7.io_write, p8.io_write), (100.0, 2000.0, 0.0));
+    }
+
+    #[test]
+    fn old_daemon_has_no_extra_sections() {
+        let m = Model::from_snapshot(&json!({"cpu": {}}), 1000);
+        assert!(m.sys.is_none() && m.hwmon.is_empty() && m.sockets.is_none());
     }
 
     #[test]

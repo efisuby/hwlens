@@ -1,5 +1,7 @@
 //! Resource pages. Each takes the latest model and returns the page body.
 
+use std::collections::{HashMap, VecDeque};
+
 use gpui::{Context, Div, Rgba, div, prelude::*, px};
 
 use super::{
@@ -108,13 +110,35 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>) -> Div {
             row()
                 .child(col().child(cores_bars(m)))
                 .child(col().child(pressure_card(m)))
-                .child(col().child(disks_brief(m))),
+                .children(m.sys.as_ref().map(|s| col().child(system_card(s, m)))),
         )
         .child(
             row()
                 .child(col().child(top_procs("Top CPU", color::cpu(), &top_cpu[..top_cpu.len().min(8)], |p| format!("{:.1} %", p.cpu))))
-                .child(col().child(top_procs("Top memory", color::mem(), &top_mem[..top_mem.len().min(8)], |p| bytes(p.mem)))),
+                .child(col().child(top_procs("Top memory", color::mem(), &top_mem[..top_mem.len().min(8)], |p| bytes(p.mem))))
+                .child(col().child(disks_brief(m))),
         )
+}
+
+fn system_card(s: &crate::model::SysInfo, m: &Model) -> Div {
+    let rate_of = |v: Option<f64>| v.map(|x| format!("{x:.0}/s")).unwrap_or_else(|| "—".into());
+    let mut c = card()
+        .h_full()
+        .gap_2()
+        .child(title(format!("System · {}", s.hostname), color::text()))
+        .child(stat("OS", s.os.clone()))
+        .child(stat("Kernel", format!("{} {}", s.kernel, s.arch)))
+        .child(stat("Uptime", duration(s.uptime as i64)))
+        .child(stat("Processes / running / blocked", format!("{} / {} / {}", m.procs.len(), s.procs_running, s.procs_blocked)))
+        .child(stat("Context switches", rate_of(s.ctxt_per_s)))
+        .child(stat("Interrupts", rate_of(s.intr_per_s)))
+        .child(stat("New processes", s.forks_per_s.map(|x| format!("{x:.1}/s")).unwrap_or_else(|| "—".into())));
+    // file-max is often LONG_MAX, which says nothing.
+    c = c.child(stat(
+        "Open files",
+        if s.max_files > 0 && s.max_files < 1 << 40 { format!("{} of {}", s.open_files, s.max_files) } else { s.open_files.to_string() },
+    ));
+    c
 }
 
 fn summary(name: &str, col: Rgba, value: String, lines: Vec<String>, g: Graph) -> Div {
@@ -212,6 +236,7 @@ fn disks_brief(m: &Model) -> Div {
 }
 
 fn top_procs(name: &str, col: Rgba, procs: &[&Proc], value: impl Fn(&Proc) -> String) -> Div {
+    let wide = procs.iter().map(|p| value(p).len()).max().unwrap_or(0) > 12;
     let rows = procs.iter().map(|p| {
         div()
             .flex()
@@ -221,7 +246,7 @@ fn top_procs(name: &str, col: Rgba, procs: &[&Proc], value: impl Fn(&Proc) -> St
             .child(div().w(px(64.)).text_right().text_color(color::faint()).child(p.pid.to_string()))
             .child(div().flex_1().truncate().child(p.name.clone()))
             .child(div().text_color(color::muted()).w(px(80.)).truncate().child(p.user.clone()))
-            .child(div().w(px(84.)).text_right().child(value(p)))
+            .child(div().w(px(if wide { 190. } else { 84. })).text_right().child(value(p)))
     });
     card().child(title(name.to_owned(), col)).children(rows)
 }
@@ -385,6 +410,16 @@ pub fn disks(m: &Model) -> Div {
     let mut page = row();
     for d in m.disks.iter().filter(|d| !d.is_swap) {
         page = page.child(col().child(disk_card(d, m.cpu.psi.map(|p| p[2]))));
+    }
+    let mut io: Vec<&Proc> = m.procs.iter().filter(|p| p.io_read + p.io_write > 0.0).collect();
+    io.sort_by(|a, b| (b.io_read + b.io_write).total_cmp(&(a.io_read + a.io_write)));
+    if m.sys.is_some() {
+        let top = if io.is_empty() {
+            card().child(title("Disk I/O by process", color::disk())).child(sub("no process is reading or writing right now"))
+        } else {
+            top_procs("Disk I/O by process", color::disk(), &io[..io.len().min(12)], |p| format!("R {} W {}", rate(p.io_read), rate(p.io_write)))
+        };
+        page = page.child(col().child(top));
     }
     if m.disks.iter().all(|d| d.is_swap) {
         page = page.child(sub("hwlensd reports no disks (show_disks is off?)"));
@@ -561,7 +596,7 @@ fn gpu_section(g: &Gpu, m: &Model) -> Div {
 
 // ───────────────────────────── Sensors ─────────────────────────────
 
-pub fn sensors(m: &Model) -> Div {
+pub fn sensors(m: &Model, hist: &HashMap<String, VecDeque<f32>>) -> Div {
     let c = &m.cpu;
     let temp_row = |name: String, t: f32, max: f32| {
         div()
@@ -628,12 +663,60 @@ pub fn sensors(m: &Model) -> Div {
         }
     }
 
-    let names = card()
-        .gap_1()
-        .child(title(format!("Detected sensors · {}", c.sensor_names.len()), color::muted()))
-        .children(c.sensor_names.iter().map(|n| div().text_xs().font_family(MONO).text_color(color::muted()).child(n.clone())));
+    let top = row().child(col().child(cpu_temps)).child(col().child(other).child(fans).child(power));
+    if m.hwmon.is_empty() {
+        // Older daemons only name the sensors.
+        let names = card()
+            .gap_1()
+            .child(title(format!("Detected sensors · {}", c.sensor_names.len()), color::muted()))
+            .children(c.sensor_names.iter().map(|n| div().text_xs().font_family(MONO).text_color(color::muted()).child(n.clone())));
+        return div().flex().flex_col().gap_3().child(top).child(names);
+    }
 
-    row()
-        .child(col().child(cpu_temps))
-        .child(col().child(other).child(fans).child(power).child(names))
+    let mut chips: Vec<(&str, Vec<&crate::model::HwSensor>)> = Vec::new();
+    for s in &m.hwmon {
+        match chips.last_mut() {
+            Some((chip, list)) if *chip == s.chip => list.push(s),
+            _ => chips.push((s.chip.as_str(), vec![s])),
+        }
+    }
+    let mut grid = row();
+    for (chip, list) in chips {
+        let rows = list.into_iter().map(|s| {
+            let col = match s.kind.as_str() {
+                "temp" => s.crit.or(s.max).map(|lim| temp_color(s.value, lim)).unwrap_or(color::temp()),
+                "fan" | "pwm" => color::down(),
+                "power" => color::warn(),
+                "voltage" | "current" => color::disk(),
+                _ => color::muted(),
+            };
+            let h: Vec<f32> = hist.get(&s.key()).map(|h| h.iter().copied().collect()).unwrap_or_default();
+            let mut g = Graph::new().series(&h, col).min_max(match s.kind.as_str() {
+                "temp" => 10.,
+                "fan" => 500.,
+                "pwm" => 100.,
+                _ => 0.1,
+            });
+            if s.kind == "pwm" {
+                g = g.max(100.);
+            }
+            let limit = s.crit.or(s.max).map(|l| format!(" / {}", s.format(l))).unwrap_or_default();
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .child(div().w(px(150.)).flex_shrink_0().truncate().text_color(color::muted()).child(s.label.clone()))
+                .child(div().flex_1().min_w(px(40.)).child(graph_box(g, 18., None)))
+                .child(div().w(px(150.)).flex_shrink_0().text_right().font_family(MONO).child(format!("{}{limit}", s.format(s.value))))
+        });
+        grid = grid.child(col().child(card().gap_1().child(title(chip.to_owned(), color::temp())).children(rows)));
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(top)
+        .child(title(format!("All hwmon sensors · {}", m.hwmon.len()), color::muted()))
+        .child(grid)
 }

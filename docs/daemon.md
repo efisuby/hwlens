@@ -71,6 +71,12 @@ Decisions:
   disks, and a process table with sorting, a type-to-filter search and SIGTERM/SIGKILL.
 * `cd gui && cargo build --release`; needs `libxkbcommon-x11-dev`, `libwayland-dev`, `libvulkan-dev`.
 * `vendor/xattr` patches `xattr 0.2.3` (pulled in by gpui), which uses a constant current libc dropped.
+* Pages: Overview, CPU, Memory, Disks, Network, GPU, Processes (tree, details, signals, nice),
+  Connections and Sensors (`--page NAME` opens one; Ctrl+1…9 switch).
+* It never sends `options`: they are shared by every client and would change what the TUI shows.
+  Per-process and per-sensor history is kept on the client instead.
+* hwlensd sends extra sections for it (`sys`, `hwmon`, `proc_io`, `sockets`, see protocol.md),
+  collected by `Extra::Collector` in `src/linux/hwlens_extra.cpp`. The delta grows by about 7 %.
 
 **6. Desktop widget.** A KDE Plasma plasmoid in QML with a small C++ plugin that
 reads the same JSON lines through `QLocalSocket`.

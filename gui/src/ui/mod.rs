@@ -1,10 +1,14 @@
 //! The window: a sidebar with live values and one page at a time.
 
+mod conns;
 mod pages;
 mod procs;
 mod widgets;
 
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use futures::{StreamExt, channel::mpsc::UnboundedReceiver};
 use gpui::{Context, Div, FocusHandle, KeyDownEvent, ScrollStrategy, Task, UniformListScrollHandle, Window, div, prelude::*, px};
@@ -35,10 +39,11 @@ pub enum Page {
     Network,
     Gpu,
     Processes,
+    Connections,
     Sensors,
 }
 
-const PAGES: [(Page, &str, &str); 8] = [
+const PAGES: [(Page, &str, &str); 9] = [
     (Page::Overview, "◎", "Overview"),
     (Page::Cpu, "▦", "CPU"),
     (Page::Memory, "▤", "Memory"),
@@ -46,6 +51,7 @@ const PAGES: [(Page, &str, &str); 8] = [
     (Page::Network, "⇅", "Network"),
     (Page::Gpu, "◈", "GPU"),
     (Page::Processes, "≡", "Processes"),
+    (Page::Connections, "⇄", "Connections"),
     (Page::Sensors, "♨", "Sensors"),
 ];
 
@@ -62,6 +68,10 @@ pub struct HwlensView {
     requests: Requests,
     page: Page,
     procs: ProcState,
+    conn_filter: String,
+    conn_rows: Vec<conns::ConnRow>,
+    /// Client-side history of every hwmon sensor, by HwSensor::key().
+    sensor_hist: HashMap<String, VecDeque<f32>>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     _events: Task<()>,
@@ -85,6 +95,9 @@ impl HwlensView {
             requests,
             page,
             procs: ProcState::default(),
+            conn_filter: String::new(),
+            conn_rows: Vec::new(),
+            sensor_hist: HashMap::new(),
             focus,
             scroll: UniformListScrollHandle::new(),
             _events: events,
@@ -96,8 +109,10 @@ impl HwlensView {
             Event::Model(m) => {
                 if m.tick {
                     self.procs.record(&m);
+                    self.record_sensors(&m);
                 }
                 self.procs.rebuild(&m);
+                self.conn_rows = conns::rows(&m, &self.conn_filter);
                 self.model = Some(m);
                 self.link = Link::Up;
             }
@@ -115,8 +130,26 @@ impl HwlensView {
     fn rebuild(&mut self, cx: &mut Context<Self>) {
         if let Some(m) = self.model.clone() {
             self.procs.rebuild(&m);
+            self.conn_rows = conns::rows(&m, &self.conn_filter);
         }
         cx.notify();
+    }
+
+    fn record_sensors(&mut self, m: &Model) {
+        let keys: std::collections::HashSet<String> = m.hwmon.iter().map(|s| s.key()).collect();
+        self.sensor_hist.retain(|k, _| keys.contains(k));
+        for s in &m.hwmon {
+            let h = self.sensor_hist.entry(s.key()).or_default();
+            h.push_back(s.value);
+            if h.len() > procs::HIST {
+                h.pop_front();
+            }
+        }
+    }
+
+    /// The text filter that typing edits on the current page.
+    fn filter_mut(&mut self) -> &mut String {
+        if self.page == Page::Connections { &mut self.conn_filter } else { &mut self.procs.filter }
     }
 
     fn proc_name(&self, pid: u64) -> String {
@@ -176,14 +209,15 @@ impl HwlensView {
             return;
         }
         let on_procs = self.page == Page::Processes;
+        let filtering = on_procs || self.page == Page::Connections;
         match ks.key.as_str() {
-            "escape" if !self.procs.filter.is_empty() => {
-                self.procs.filter.clear();
+            "escape" if filtering && !self.filter_mut().is_empty() => {
+                self.filter_mut().clear();
                 self.rebuild(cx);
             }
             "escape" => self.procs.selected = None,
-            "backspace" if on_procs => {
-                self.procs.filter.pop();
+            "backspace" if filtering => {
+                self.filter_mut().pop();
                 self.rebuild(cx);
             }
             "up" if on_procs => self.move_selection(-1),
@@ -200,9 +234,11 @@ impl HwlensView {
                 if m.alt || m.platform || ch.chars().any(char::is_control) {
                     return;
                 }
-                // Typing anywhere searches processes.
-                self.page = Page::Processes;
-                self.procs.filter.push_str(ch);
+                // Typing searches connections on their page, processes everywhere else.
+                if self.page != Page::Connections {
+                    self.page = Page::Processes;
+                }
+                self.filter_mut().push_str(ch);
                 self.rebuild(cx);
             }
         }
@@ -222,6 +258,7 @@ impl HwlensView {
                 Page::Network => m.net().map(|n| rate(last(&n.down) + last(&n.up))).unwrap_or_default(),
                 Page::Gpu => m.gpus.first().map(|g| format!("{:.0}%", last(&g.util))).unwrap_or_default(),
                 Page::Processes => m.procs.len().to_string(),
+                Page::Connections => m.sockets.as_ref().map(|s| s.total.to_string()).unwrap_or_default(),
                 Page::Sensors => m.cpu.temp.map(|t| format!("{t:.0}°")).unwrap_or_default(),
                 Page::Overview => String::new(),
             }
@@ -276,7 +313,7 @@ impl HwlensView {
                     .child(div().size(px(8.)).rounded_full().bg(dot))
                     .child(status),
             )
-            .child(div().px_2().text_xs().text_color(color::faint()).child("Ctrl+1…8 pages · type to search"))
+            .child(div().px_2().text_xs().text_color(color::faint()).child("Ctrl+1…9 pages · type to search"))
     }
 }
 
@@ -305,6 +342,7 @@ impl Render for HwlensView {
 
         let body = match self.page {
             Page::Processes => div().flex_1().min_h(px(0.)).p_3().child(self.procs_page(&m, cx)),
+            Page::Connections => div().flex_1().min_h(px(0.)).p_3().child(self.conns_page(&m, cx)),
             page => {
                 let content = match page {
                     Page::Overview => pages::overview(&m, cx),
@@ -313,8 +351,8 @@ impl Render for HwlensView {
                     Page::Disks => pages::disks(&m),
                     Page::Network => pages::network(&m),
                     Page::Gpu => pages::gpu(&m),
-                    Page::Sensors => pages::sensors(&m),
-                    Page::Processes => unreachable!(),
+                    Page::Sensors => pages::sensors(&m, &self.sensor_hist),
+                    Page::Processes | Page::Connections => unreachable!(),
                 };
                 div().flex_1().min_h(px(0.)).child(div().id(("page", page as usize)).size_full().overflow_y_scroll().p_3().child(content))
             }
