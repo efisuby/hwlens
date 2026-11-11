@@ -64,6 +64,14 @@ Decisions:
   enables the socket and drops the setcap on `/usr/bin/hwlens`.
 * `systemd-analyze security hwlensd.service`: exposure 4.6 (OK).
 
+**6a. Desktop client.** *First version.*
+* `gui/` is `hwlens-gui`, a separate Rust program built with GPUI (the UI toolkit of Zed).
+  It speaks the same protocol: `gui/src/patch.rs` mirrors `patch()` and has unit tests.
+* Summary cards with graphs (CPU, memory, network, first GPU), per-core load with P/E kinds,
+  disks, and a process table with sorting, a type-to-filter search and SIGTERM/SIGKILL.
+* `cd gui && cargo build --release`; needs `libxkbcommon-x11-dev`, `libwayland-dev`, `libvulkan-dev`.
+* `vendor/xattr` patches `xattr 0.2.3` (pulled in by gpui), which uses a constant current libc dropped.
+
 **6. Desktop widget.** A KDE Plasma plasmoid in QML with a small C++ plugin that
 reads the same JSON lines through `QLocalSocket`.
 

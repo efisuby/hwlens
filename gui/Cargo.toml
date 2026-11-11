@@ -1,0 +1,15 @@
+[package]
+name = "hwlens-gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+futures = { version = "0.3", default-features = false, features = ["std", "executor"] }
+gpui = "=0.2.2"
+serde_json = "1.0.154"
+
+[patch.crates-io]
+# zed-async-tar (via gpui_http_client) pins xattr 0.2.3, which uses libc::ENOATTR
+# that current libc no longer has. See vendor/xattr/src/sys/mod.rs.
+xattr = { path = "vendor/xattr" }
