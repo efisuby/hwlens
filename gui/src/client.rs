@@ -44,6 +44,10 @@ impl Requests {
     pub fn signal(&self, pid: u64, signal: i32) -> Result<()> {
         self.send(&json!({"signal": {"pid": pid, "signal": signal}}))
     }
+
+    pub fn nice(&self, pid: u64, nice: i64) -> Result<()> {
+        self.send(&json!({"nice": {"pid": pid, "nice": nice}}))
+    }
 }
 
 pub fn start(path: PathBuf, tx: UnboundedSender<Event>) -> Requests {
@@ -109,6 +113,7 @@ fn session(path: &Path, writer: &Mutex<Option<UnixStream>>, tx: &UnboundedSender
 
         let s = msg["seq"].as_u64().context("message without seq")?;
         let update_ms = msg["update_ms"].as_u64().unwrap_or(1000);
+        let tick = msg.get("full").is_some() || msg["tick"].as_bool().unwrap_or(false);
         if let Some(full) = msg.get_mut("full") {
             state = full.take();
         } else {
@@ -124,7 +129,9 @@ fn session(path: &Path, writer: &Mutex<Option<UnixStream>>, tx: &UnboundedSender
             }
         }
         seq = Some(s);
-        send(tx, Event::Model(Arc::new(Model::from_snapshot(&state, update_ms))))?;
+        let mut model = Model::from_snapshot(&state, update_ms);
+        model.tick = tick;
+        send(tx, Event::Model(Arc::new(model)))?;
     }
 }
 

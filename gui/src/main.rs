@@ -11,17 +11,31 @@ use gpui::{
     App, Application, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, prelude::*, px, size,
 };
 
-fn socket_path() -> PathBuf {
+struct Args {
+    socket: PathBuf,
+    page: ui::Page,
+}
+
+fn args() -> Args {
+    let mut socket = None;
+    let mut page = ui::Page::Overview;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--socket" | "-s" => {
-                if let Some(p) = args.next() {
-                    return p.into();
-                }
+            "--socket" | "-s" => socket = args.next().map(PathBuf::from),
+            "--page" | "-p" => {
+                let name = args.next().unwrap_or_default();
+                page = ui::Page::from_name(&name).unwrap_or_else(|| {
+                    eprintln!("hwlens-gui: unknown page {name:?}; pages: {}", ui::Page::names().join(", "));
+                    std::process::exit(2);
+                });
             }
             "--help" | "-h" => {
-                println!("usage: hwlens-gui [--socket PATH]\n\nDefault socket: $HWLENSD_SOCKET or {}", client::DEFAULT_SOCKET);
+                println!(
+                    "usage: hwlens-gui [--socket PATH] [--page NAME]\n\nDefault socket: $HWLENSD_SOCKET or {}\nPages: {}",
+                    client::DEFAULT_SOCKET,
+                    ui::Page::names().join(", ")
+                );
                 std::process::exit(0);
             }
             other => {
@@ -30,11 +44,14 @@ fn socket_path() -> PathBuf {
             }
         }
     }
-    std::env::var_os("HWLENSD_SOCKET").map(PathBuf::from).unwrap_or_else(|| client::DEFAULT_SOCKET.into())
+    let socket = socket
+        .or_else(|| std::env::var_os("HWLENSD_SOCKET").map(PathBuf::from))
+        .unwrap_or_else(|| client::DEFAULT_SOCKET.into());
+    Args { socket, page }
 }
 
 fn main() {
-    let socket = socket_path();
+    let Args { socket, page } = args();
     Application::new().run(move |cx: &mut App| {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let requests = client::start(socket, tx);
@@ -48,7 +65,7 @@ fn main() {
                 window_min_size: Some(size(px(900.), px(600.))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, rx, window, cx)),
+            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, page, rx, window, cx)),
         )
         .expect("open the window");
         cx.on_window_closed(|cx| {

@@ -1,0 +1,337 @@
+//! The window: a sidebar with live values and one page at a time.
+
+mod pages;
+mod procs;
+mod widgets;
+
+use std::sync::Arc;
+
+use futures::{StreamExt, channel::mpsc::UnboundedReceiver};
+use gpui::{Context, Div, FocusHandle, KeyDownEvent, ScrollStrategy, Task, UniformListScrollHandle, Window, div, prelude::*, px};
+
+use crate::{
+    client::{Event, Requests},
+    model::{Model, rate},
+};
+use procs::ProcState;
+use widgets::{color, last};
+
+impl Page {
+    pub fn from_name(name: &str) -> Option<Page> {
+        PAGES.iter().find(|(_, _, n)| n.eq_ignore_ascii_case(name)).map(|(p, _, _)| *p)
+    }
+
+    pub fn names() -> Vec<&'static str> {
+        PAGES.iter().map(|(_, _, n)| *n).collect()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Page {
+    Overview,
+    Cpu,
+    Memory,
+    Disks,
+    Network,
+    Gpu,
+    Processes,
+    Sensors,
+}
+
+const PAGES: [(Page, &str, &str); 8] = [
+    (Page::Overview, "◎", "Overview"),
+    (Page::Cpu, "▦", "CPU"),
+    (Page::Memory, "▤", "Memory"),
+    (Page::Disks, "◫", "Disks"),
+    (Page::Network, "⇅", "Network"),
+    (Page::Gpu, "◈", "GPU"),
+    (Page::Processes, "≡", "Processes"),
+    (Page::Sensors, "♨", "Sensors"),
+];
+
+enum Link {
+    Connecting,
+    Up,
+    Down(String),
+}
+
+pub struct HwlensView {
+    model: Option<Arc<Model>>,
+    link: Link,
+    message: Option<(bool, String)>,
+    requests: Requests,
+    page: Page,
+    procs: ProcState,
+    focus: FocusHandle,
+    scroll: UniformListScrollHandle,
+    _events: Task<()>,
+}
+
+impl HwlensView {
+    pub fn new(requests: Requests, page: Page, mut rx: UnboundedReceiver<Event>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let events = cx.spawn(async move |this, cx| {
+            while let Some(ev) = rx.next().await {
+                if this.update(cx, |view, cx| view.on_event(ev, cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        let focus = cx.focus_handle();
+        window.focus(&focus);
+        HwlensView {
+            model: None,
+            link: Link::Connecting,
+            message: None,
+            requests,
+            page,
+            procs: ProcState::default(),
+            focus,
+            scroll: UniformListScrollHandle::new(),
+            _events: events,
+        }
+    }
+
+    fn on_event(&mut self, ev: Event, cx: &mut Context<Self>) {
+        match ev {
+            Event::Model(m) => {
+                if m.tick {
+                    self.procs.record(&m);
+                }
+                self.procs.rebuild(&m);
+                self.model = Some(m);
+                self.link = Link::Up;
+            }
+            Event::Disconnected(why) => self.link = Link::Down(why),
+            Event::Reply { ok, text } => self.message = Some((ok, text)),
+        }
+        cx.notify();
+    }
+
+    fn go(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.page = page;
+        cx.notify();
+    }
+
+    fn rebuild(&mut self, cx: &mut Context<Self>) {
+        if let Some(m) = self.model.clone() {
+            self.procs.rebuild(&m);
+        }
+        cx.notify();
+    }
+
+    fn proc_name(&self, pid: u64) -> String {
+        self.model
+            .as_ref()
+            .and_then(|m| m.procs.iter().find(|p| p.pid == pid))
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn send_signal(&mut self, pid: u64, signal: i32) {
+        let name = self.proc_name(pid);
+        self.message = Some(match self.requests.signal(pid, signal) {
+            Ok(()) => (true, format!("sent signal {signal} to {name} ({pid})")),
+            Err(e) => (false, format!("{e:#}")),
+        });
+    }
+
+    fn send_nice(&mut self, pid: u64, nice: i64) {
+        let name = self.proc_name(pid);
+        self.message = Some(match self.requests.nice(pid, nice) {
+            Ok(()) => (true, format!("asked nice {nice} for {name} ({pid})")),
+            Err(e) => (false, format!("{e:#}")),
+        });
+    }
+
+    fn move_selection(&mut self, by: isize) {
+        let rows = &self.procs.rows;
+        if rows.is_empty() {
+            return;
+        }
+        let ix = match self.procs.selected_index() {
+            Some(i) => (i as isize + by).clamp(0, rows.len() as isize - 1) as usize,
+            None => 0,
+        };
+        self.procs.selected = Some(rows[ix].proc.pid);
+        self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+    }
+
+    fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = ks.modifiers;
+        if m.control {
+            match ks.key.as_str() {
+                "q" => cx.quit(),
+                "t" => {
+                    self.procs.tree = !self.procs.tree;
+                    self.page = Page::Processes;
+                    self.rebuild(cx);
+                }
+                k => {
+                    if let Some(i) = k.parse::<usize>().ok().filter(|i| (1..=PAGES.len()).contains(i)) {
+                        self.go(PAGES[i - 1].0, cx);
+                    }
+                }
+            }
+            return;
+        }
+        let on_procs = self.page == Page::Processes;
+        match ks.key.as_str() {
+            "escape" if !self.procs.filter.is_empty() => {
+                self.procs.filter.clear();
+                self.rebuild(cx);
+            }
+            "escape" => self.procs.selected = None,
+            "backspace" if on_procs => {
+                self.procs.filter.pop();
+                self.rebuild(cx);
+            }
+            "up" if on_procs => self.move_selection(-1),
+            "down" if on_procs => self.move_selection(1),
+            "pageup" if on_procs => self.move_selection(-20),
+            "pagedown" if on_procs => self.move_selection(20),
+            "delete" if on_procs => {
+                if let Some(pid) = self.procs.selected {
+                    self.send_signal(pid, if m.shift { 9 } else { 15 });
+                }
+            }
+            _ => {
+                let Some(ch) = ks.key_char.as_deref() else { return };
+                if m.alt || m.platform || ch.chars().any(char::is_control) {
+                    return;
+                }
+                // Typing anywhere searches processes.
+                self.page = Page::Processes;
+                self.procs.filter.push_str(ch);
+                self.rebuild(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn sidebar(&self, m: Option<&Model>, cx: &mut Context<Self>) -> Div {
+        let value = |page: Page| -> String {
+            let Some(m) = m else { return String::new() };
+            match page {
+                Page::Cpu => format!("{:.0}%", last(&m.cpu.total)),
+                Page::Memory => format!("{:.0}%", last(&m.mem.used_hist)),
+                Page::Disks => {
+                    let io: f32 = m.disks.iter().filter(|d| !d.is_swap).map(|d| last(&d.read) + last(&d.write)).sum();
+                    if io > 0.0 { rate(io) } else { String::new() }
+                }
+                Page::Network => m.net().map(|n| rate(last(&n.down) + last(&n.up))).unwrap_or_default(),
+                Page::Gpu => m.gpus.first().map(|g| format!("{:.0}%", last(&g.util))).unwrap_or_default(),
+                Page::Processes => m.procs.len().to_string(),
+                Page::Sensors => m.cpu.temp.map(|t| format!("{t:.0}°")).unwrap_or_default(),
+                Page::Overview => String::new(),
+            }
+        };
+        let items = PAGES.iter().enumerate().map(|(i, &(page, icon, name))| {
+            let active = self.page == page;
+            div()
+                .id(("nav", i))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .cursor_pointer()
+                .when(active, |d| d.bg(color::selected()))
+                .when(!active, |d| d.hover(|s| s.bg(color::hover())))
+                .text_color(if active { color::text() } else { color::muted() })
+                .on_click(cx.listener(move |this, _, _, cx| this.go(page, cx)))
+                .child(div().w(px(16.)).child(icon))
+                .child(div().flex_1().child(name))
+                .child(div().text_xs().font_family(widgets::MONO).text_color(color::faint()).child(value(page)))
+        });
+        let (dot, status) = match &self.link {
+            Link::Up => (color::mem(), m.map(|m| format!("hwlensd · {} ms", m.update_ms)).unwrap_or_default()),
+            Link::Connecting => (color::warn(), "connecting".to_owned()),
+            Link::Down(_) => (color::bad(), "disconnected".to_owned()),
+        };
+        div()
+            .w(px(196.))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .bg(color::sidebar())
+            .border_r_1()
+            .border_color(color::border())
+            .child(div().px_2().py_2().text_lg().font_weight(gpui::FontWeight::BOLD).child("hwlens"))
+            .children(m.map(|m| div().px_2().pb_2().text_xs().text_color(color::muted()).child(format!("{} · {}", m.cpu.name, m.cpu.hz))))
+            .children(items)
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .text_xs()
+                    .text_color(color::muted())
+                    .child(div().size(px(8.)).rounded_full().bg(dot))
+                    .child(status),
+            )
+            .child(div().px_2().text_xs().text_color(color::faint()).child("Ctrl+1…8 pages · type to search"))
+    }
+}
+
+impl Render for HwlensView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let m = self.model.clone();
+        let root = div()
+            .key_context("hwlens")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key))
+            .size_full()
+            .flex()
+            .bg(color::bg())
+            .text_color(color::text())
+            .font_family("Noto Sans")
+            .text_sm()
+            .child(self.sidebar(m.as_deref(), cx));
+
+        let Some(m) = m else {
+            let text = match &self.link {
+                Link::Down(why) => why.clone(),
+                _ => "Connecting to hwlensd…".to_owned(),
+            };
+            return root.child(div().flex_1().flex().items_center().justify_center().text_color(color::muted()).child(text));
+        };
+
+        let body = match self.page {
+            Page::Processes => div().flex_1().min_h(px(0.)).p_3().child(self.procs_page(&m, cx)),
+            page => {
+                let content = match page {
+                    Page::Overview => pages::overview(&m, cx),
+                    Page::Cpu => pages::cpu(&m),
+                    Page::Memory => pages::memory(&m),
+                    Page::Disks => pages::disks(&m),
+                    Page::Network => pages::network(&m),
+                    Page::Gpu => pages::gpu(&m),
+                    Page::Sensors => pages::sensors(&m),
+                    Page::Processes => unreachable!(),
+                };
+                div().flex_1().min_h(px(0.)).child(div().id(("page", page as usize)).size_full().overflow_y_scroll().p_3().child(content))
+            }
+        };
+
+        let mut status = div().flex().gap_3().px_3().py_1().border_t_1().border_color(color::border()).text_xs().text_color(color::muted());
+        status = match &self.link {
+            Link::Down(why) => status.child(div().text_color(color::bad()).truncate().child(why.clone())),
+            _ => status.child(
+                "Processes: ↑↓ select · Del SIGTERM · Shift+Del SIGKILL · Ctrl+T tree · Esc clear · Ctrl+Q quit",
+            ),
+        };
+        status = status.child(div().flex_1());
+        if let Some((ok, text)) = &self.message {
+            status = status.child(div().text_color(if *ok { color::mem() } else { color::bad() }).child(text.clone()));
+        }
+
+        root.child(div().flex_1().min_w_0().h_full().flex().flex_col().child(body).child(status))
+    }
+}
