@@ -7,7 +7,7 @@ use gpui::{Context, Div, Rgba, div, prelude::*, px};
 use super::{
     HwlensView, Page,
     fav::Pins,
-    widgets::{Graph, MONO, avg, bar, big, segments, card, color, graph_box, last, legend, peak, stat, sub, title},
+    widgets::{Graph, MONO, avg, bar, big, chip, overlay, overlay_row, fmt_celsius, fmt_rate, graph_card, graph_panel, segments, card, color, graph_box, last, legend, peak, stat, sub, title},
 };
 use crate::model::{CPU_FIELDS, Disk, Gpu, Model, Net, Proc, bytes, duration, rate};
 
@@ -33,14 +33,14 @@ fn temp_color(t: f32, max: f32) -> Rgba {
 // ───────────────────────────── Overview ─────────────────────────────
 
 pub fn overview(m: &Model, cx: &mut Context<HwlensView>, pins: &Pins, favorites: Div) -> Div {
-    let link = |page: Page, body: Div, cx: &mut Context<HwlensView>| {
-        body.id(("ov", page as usize))
+    let link = |page: Page, body: gpui::Stateful<Div>, cx: &mut Context<HwlensView>| {
+        div()
+            .id(("ov", page as usize))
             .flex_1()
             .min_w(px(240.))
-            .h(px(186.))
             .cursor_pointer()
-            .hover(|s| s.border_color(color::muted()))
             .on_click(cx.listener(move |this, _, _, cx| this.go(page, cx)))
+            .child(body.hover(|s| s.border_color(color::muted())))
     };
 
     let c = &m.cpu;
@@ -52,14 +52,14 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>, pins: &Pins, favorites:
         cpu_line.push(format!("{w:.0} W"));
     }
     cpu_line.push(format!("load {:.2} {:.2} {:.2}", c.load_avg[0], c.load_avg[1], c.load_avg[2]));
-    let cpu_card = summary("CPU", color::cpu(), pct(last(&c.total)), vec![cpu_line.join(" · ")], Graph::percent().series(&c.total, color::cpu()));
+    let cpu_card = summary("CPU", color::cpu(), pct(last(&c.total)), vec![cpu_line.join(" · ")], Graph::percent().series(&c.total, color::cpu()).name("cpu"));
 
     let x = &m.mem;
     let mut mem_lines = vec![format!("{} of {} · cached {}", bytes(x.used), bytes(x.total), bytes(x.cached))];
     if x.swap_total > 0 {
         mem_lines.push(format!("swap {} of {}", bytes(x.swap_used), bytes(x.swap_total)));
     }
-    let mem_card = summary("Memory", color::mem(), pct(last(&x.used_hist)), mem_lines, Graph::percent().series(&x.used_hist, color::mem()));
+    let mem_card = summary("Memory", color::mem(), pct(last(&x.used_hist)), mem_lines, Graph::percent().series(&x.used_hist, color::mem()).name("used"));
 
     let net_card = match m.net() {
         Some(n) => summary(
@@ -67,7 +67,7 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>, pins: &Pins, favorites:
             color::down(),
             format!("↓ {}", rate(last(&n.down))),
             vec![format!("↑ {} · {} {}", rate(last(&n.up)), n.iface, n.addr)],
-            Graph::new().min_max(1024.).series(&n.down, color::down()).series(&n.up, color::up()),
+            Graph::new().min_max(1024.).fmt(fmt_rate).series(&n.down, color::down()).name("↓").series(&n.up, color::up()).name("↑"),
         ),
         None => summary("Network", color::down(), "—".into(), vec![], Graph::new()),
     };
@@ -92,7 +92,7 @@ pub fn overview(m: &Model, cx: &mut Context<HwlensView>, pins: &Pins, favorites:
             color::gpu(),
             pct(last(&g.util)),
             vec![parts.join(" · "), format!("VRAM {} of {}", bytes(g.mem_used), bytes(g.mem_total))],
-            Graph::percent().series(&g.util, color::gpu()),
+            Graph::percent().series(&g.util, color::gpu()).name("gpu"),
         );
         cards = cards.child(link(Page::Gpu, card, cx));
     }
@@ -140,12 +140,13 @@ fn system_card(m: &Model, pins: &Pins) -> Div {
         .child(pins.row(m, "sys.files", "Open files"))
 }
 
-fn summary(name: &str, col: Rgba, value: String, lines: Vec<String>, g: Graph) -> Div {
-    card()
-        .child(title(name.to_owned(), col))
-        .child(big(value))
-        .children(lines.into_iter().map(sub))
-        .child(div().flex_1().min_h(px(36.)).mt_1().child(g.render()))
+/// An overview card: the graph fills it, the numbers sit on top.
+fn summary(name: &str, col: Rgba, value: String, lines: Vec<String>, g: Graph) -> gpui::Stateful<Div> {
+    graph_card(
+        g,
+        186.,
+        overlay().child(chip(title(name.to_owned(), col))).child(chip(big(value))).children(lines.into_iter().map(|l| chip(sub(l)))),
+    )
 }
 
 fn cores_bars(m: &Model) -> Div {
@@ -270,13 +271,13 @@ pub fn cpu(m: &Model, pins: &Pins) -> Div {
     let kinds = if p + e > 0 { format!("{p} P + {e} E threads") } else { format!("{} threads", c.cores.len()) };
 
     let mut g = Graph::percent().stacked().grid();
-    let mut legends = div().flex().flex_wrap().gap_3();
+    let mut legends = div().flex().flex_wrap().gap_2();
     for (i, (name, hist)) in CPU_FIELDS.iter().zip(&c.breakdown).enumerate() {
         if hist.is_empty() {
             continue;
         }
-        g = g.series(hist, color::series(i));
-        legends = legends.child(legend(color::series(i), *name, format!("{:.1} %", last(hist))));
+        g = g.series(hist, color::series(i)).name(name);
+        legends = legends.child(chip(legend(color::series(i), *name, format!("{:.1} %", last(hist)))));
     }
 
     let mut info = card()
@@ -297,32 +298,38 @@ pub fn cpu(m: &Model, pins: &Pins) -> Div {
         info = info.child(pins.stat("cpu.temp", "Package temperature", format!("{t:.0} °C (crit {:.0})", c.temp_max)));
     }
 
-    let mut temp_card = card().gap_2().child(title("Package temperature", color::temp()));
-    if c.temp_hist.len() >= 2 {
-        temp_card = temp_card
-            .child(graph_box(Graph::new().max(c.temp_max).series(&c.temp_hist, color::temp()).fit().grid(), 120., Some(format!("{:.0} °C", c.temp_max))))
-            .child(sub(format!("last {} samples", c.temp_hist.len())));
+    let temp_card = if c.temp_hist.len() >= 2 {
+        let g = Graph::new().max(c.temp_max).fmt(fmt_celsius).series(&c.temp_hist, color::temp()).name("package").fit().grid();
+        let now = c.temp.map(|t| format!("{t:.0} °C")).unwrap_or_default();
+        graph_card(
+            g,
+            200.,
+            overlay()
+                .child(overlay_row().child(chip(title("Package temperature", color::temp()))).child(div().flex_1()).child(chip(big(now).text_lg())))
+                .child(chip(sub(format!("scale {:.0} °C · last {} samples", c.temp_max, c.temp_hist.len())))),
+        )
+        .into_any_element()
     } else {
-        temp_card = temp_card.child(sub("no temperature sensor"));
-    }
+        card().gap_2().child(title("Package temperature", color::temp())).child(sub("no temperature sensor")).into_any_element()
+    };
 
     let cores = c.cores.iter().enumerate().map(|(i, k)| {
         let label = if k.kind == ' ' { format!("CPU {i}") } else { format!("{}{i}", k.kind) };
         let col = if k.kind == 'E' { color::gpu() } else { color::cpu() };
         let t = k.temp.map(|t| format!("{t:.0}°")).unwrap_or_default();
-        card()
-            .w(px(150.))
-            .p_2()
-            .child(
-                div()
-                    .flex()
-                    .text_xs()
-                    .child(div().text_color(col).child(label))
-                    .child(div().flex_1())
-                    .child(div().text_color(k.temp.map(|t| temp_color(t, c.temp_max)).unwrap_or(color::muted())).child(t)),
-            )
-            .child(div().font_family(MONO).child(format!("{:.0} %", k.percent)))
-            .child(graph_box(Graph::percent().series(&k.hist, col).fit(), 34., None))
+        div().w(px(150.)).child(graph_card(
+            Graph::percent().series(&k.hist, col).name("load").fit(),
+            70.,
+            overlay()
+                .child(
+                    overlay_row()
+                        .text_xs()
+                        .child(chip(div().text_color(col).child(label)))
+                        .child(div().flex_1())
+                        .child(chip(div().text_color(k.temp.map(|t| temp_color(t, c.temp_max)).unwrap_or(color::muted())).child(t))),
+                )
+                .child(chip(div().text_sm().font_family(MONO).child(format!("{:.0} %", k.percent)))),
+        ))
     });
 
     let mut top: Vec<&Proc> = m.procs.iter().collect();
@@ -332,13 +339,13 @@ pub fn cpu(m: &Model, pins: &Pins) -> Div {
         .flex()
         .flex_col()
         .gap_3()
-        .child(
-            card()
-                .gap_2()
-                .child(div().flex().child(title("CPU time by category", color::cpu())).child(div().flex_1()).child(big(pct(last(&c.total))).text_lg()))
-                .child(graph_box(g, 200., Some("100 %".into())))
+        .child(graph_card(
+            g,
+            260.,
+            overlay()
+                .child(overlay_row().child(chip(title("CPU time by category", color::cpu()))).child(div().flex_1()).child(chip(big(pct(last(&c.total))).text_lg())))
                 .child(legends),
-        )
+        ))
         .child(row().child(col().child(info)).child(col().child(temp_card)))
         .child(card().gap_2().child(title(format!("Per core · {}", c.cores.len()), color::cpu())).child(div().flex().flex_wrap().gap_2().children(cores)))
         .child(top_procs("Top CPU", color::cpu(), &top[..top.len().min(12)], |p| format!("{:.1} %", p.cpu)))
@@ -356,8 +363,11 @@ pub fn memory(m: &Model, pins: &Pins) -> Div {
     let g = Graph::percent()
         .grid()
         .series(&x.available_hist, color::series(5))
+        .name("available")
         .series(&x.cached_hist, color::series(1))
-        .series(&x.used_hist, color::mem());
+        .name("cached")
+        .series(&x.used_hist, color::mem())
+        .name("used");
 
     let mut info = card()
         .gap_2()
@@ -386,7 +396,7 @@ pub fn memory(m: &Model, pins: &Pins) -> Div {
         swap = swap
             .child(pins.row(m, "mem.swap", "Used"))
             .child(bar(f, color::level(f * 100., 50., 80.)))
-            .child(graph_box(Graph::percent().series(&x.swap_hist, color::warn()).grid(), 90., None));
+            .child(graph_box(Graph::percent().series(&x.swap_hist, color::warn()).name("swap").grid(), 90., None));
     } else {
         swap = swap.child(sub("no swap"));
     }
@@ -398,20 +408,20 @@ pub fn memory(m: &Model, pins: &Pins) -> Div {
         .flex()
         .flex_col()
         .gap_3()
-        .child(
-            card()
-                .gap_2()
-                .child(div().flex().child(title("Memory history", color::mem())).child(div().flex_1()).child(big(pct(last(&x.used_hist))).text_lg()))
-                .child(graph_box(g, 180., Some("100 %".into())))
+        .child(graph_card(
+            g,
+            240.,
+            overlay()
+                .child(overlay_row().child(chip(title("Memory history", color::mem()))).child(div().flex_1()).child(chip(big(pct(last(&x.used_hist))).text_lg())))
                 .child(
                     div()
                         .flex()
-                        .gap_3()
-                        .child(legend(color::mem(), "used", pct(last(&x.used_hist))))
-                        .child(legend(color::series(1), "cached", pct(last(&x.cached_hist))))
-                        .child(legend(color::series(5), "available", pct(last(&x.available_hist)))),
+                        .gap_2()
+                        .child(chip(legend(color::mem(), "used", pct(last(&x.used_hist)))))
+                        .child(chip(legend(color::series(1), "cached", pct(last(&x.cached_hist)))))
+                        .child(chip(legend(color::series(5), "available", pct(last(&x.available_hist))))),
                 ),
-        )
+        ))
         .child(row().child(col().child(info)).child(col().child(swap)))
         .child(top_procs("Top memory", color::mem(), &top[..top.len().min(12)], |p| bytes(p.mem)))
 }
@@ -456,7 +466,7 @@ pub fn disks(m: &Model, hist: &HashMap<u64, super::procs::ProcHist>, pins: &Pins
 fn disk_card(d: &Disk, m: &Model, pins: &Pins) -> Div {
     let io_psi = m.cpu.psi.map(|p| p[2]);
     let key = |what: &str| format!("disk.{}.{what}", d.mount);
-    let io = Graph::new().min_max(64. * 1024.).grid().series(&d.read, color::down()).series(&d.write, color::up());
+    let io = Graph::new().min_max(64. * 1024.).grid().fmt(fmt_rate).series(&d.read, color::down()).name("read").series(&d.write, color::up()).name("write");
     let scale = io.scale(400.);
     let mut head = div()
         .flex()
@@ -476,17 +486,17 @@ fn disk_card(d: &Disk, m: &Model, pins: &Pins) -> Div {
     }
     if !d.read.is_empty() {
         c = c
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .child(legend(color::down(), "read", rate(last(&d.read))))
-                    .child(legend(color::up(), "write", rate(last(&d.write))))
+            .child(graph_panel(
+                io,
+                120.,
+                overlay_row()
+                    .child(chip(legend(color::down(), "read", rate(last(&d.read)))))
+                    .child(chip(legend(color::up(), "write", rate(last(&d.write)))))
                     .child(div().flex_1())
-                    .child(legend(color::disk(), "busy", pct(last(&d.activity)))),
-            )
-            .child(graph_box(io, 90., Some(rate(scale))))
-            .child(graph_box(Graph::percent().series(&d.activity, color::disk()), 40., Some("busy 100 %".into())))
+                    .child(chip(legend(color::disk(), "busy", pct(last(&d.activity)))))
+                    .child(chip(sub(rate(scale)))),
+            ))
+            .child(graph_box(Graph::percent().series(&d.activity, color::disk()).name("busy"), 40., Some("busy 100 %".into())))
             .child(pins.row(m, &key("io"), "Read / write now"))
             .child(stat("Peak (last min) read / write", format!("{} / {}", rate(peak(&d.read, 60)), rate(peak(&d.write, 60)))));
         if d.temp.is_some() {
@@ -513,7 +523,7 @@ pub fn network(m: &Model, pins: &Pins) -> Div {
 }
 
 fn net_card(n: &Net, selected: bool, m: &Model, pins: &Pins) -> Div {
-    let g = Graph::new().min_max(1024.).grid().series(&n.down, color::down()).series(&n.up, color::up());
+    let g = Graph::new().min_max(1024.).grid().fmt(fmt_rate).series(&n.down, color::down()).name("↓").series(&n.up, color::up()).name("↑");
     let scale = g.scale(400.);
     let dot = if n.connected { color::mem() } else { color::faint() };
     let mut head = div()
@@ -529,14 +539,15 @@ fn net_card(n: &Net, selected: bool, m: &Model, pins: &Pins) -> Div {
     let mut c = card()
         .gap_2()
         .child(head)
-        .child(
-            div()
-                .flex()
-                .gap_3()
-                .child(legend(color::down(), "↓", rate(last(&n.down))))
-                .child(legend(color::up(), "↑", rate(last(&n.up)))),
-        )
-        .child(graph_box(g, 100., Some(rate(scale))))
+        .child(graph_panel(
+            g,
+            120.,
+            overlay_row()
+                .child(chip(legend(color::down(), "↓", rate(last(&n.down)))))
+                .child(chip(legend(color::up(), "↑", rate(last(&n.up)))))
+                .child(div().flex_1())
+                .child(chip(sub(rate(scale)))),
+        ))
         .child(pins.row(m, &format!("net.{}.rate", n.iface), "Now ↓ / ↑"))
         .child(pins.row(m, &format!("net.{}.total", n.iface), "Total ↓ / ↑"))
         .child(stat("Top ↓ / ↑", format!("{} / {}", rate(n.down_top as f32), rate(n.up_top as f32))))
@@ -564,12 +575,12 @@ fn gpu_section(i: usize, g: &Gpu, m: &Model, pins: &Pins) -> Div {
     let key = |what: &str| format!("gpu.{i}.{what}");
     let opt = |v: Option<u64>, unit: &str| v.map(|x| format!("{x}{unit}")).unwrap_or_else(|| "—".into());
     let small = |name: &str, col: Rgba, now: String, gr: Graph| {
-        card()
-            .flex_1()
-            .min_w(px(260.))
-            .gap_1()
-            .child(div().flex().child(title(name.to_owned(), col)).child(div().flex_1()).child(div().text_sm().font_family(MONO).child(now)))
-            .child(graph_box(gr.grid(), 90., None))
+        div().flex_1().min_w(px(260.)).child(graph_card(
+            gr.grid(),
+            130.,
+            overlay()
+                .child(overlay_row().child(chip(title(name.to_owned(), col))).child(div().flex_1()).child(chip(div().text_sm().font_family(MONO).child(now)))),
+        ))
     };
 
     let mut stats = card()
@@ -603,15 +614,15 @@ fn gpu_section(i: usize, g: &Gpu, m: &Model, pins: &Pins) -> Div {
         .child(div().text_lg().font_weight(gpui::FontWeight::SEMIBOLD).child(g.name.clone()))
         .child(
             row()
-                .child(small("Utilization", color::gpu(), pct(last(&g.util)), Graph::percent().series(&g.util, color::gpu())))
-                .child(small("VRAM", color::mem(), pct(last(&g.vram_hist)), Graph::percent().series(&g.vram_hist, color::mem())))
-                .child(small("Power", color::warn(), g.power.map(|p| format!("{p:.0} W")).unwrap_or_default(), Graph::percent().series(&g.power_hist, color::warn())))
-                .child(small("Memory controller", color::series(1), pct(last(&g.mem_ctrl_hist)), Graph::percent().series(&g.mem_ctrl_hist, color::series(1))))
+                .child(small("Utilization", color::gpu(), pct(last(&g.util)), Graph::percent().series(&g.util, color::gpu()).name("load")))
+                .child(small("VRAM", color::mem(), pct(last(&g.vram_hist)), Graph::percent().series(&g.vram_hist, color::mem()).name("vram")))
+                .child(small("Power", color::warn(), g.power.map(|p| format!("{p:.0} W")).unwrap_or_default(), Graph::percent().series(&g.power_hist, color::warn()).name("% of limit")))
+                .child(small("Memory controller", color::series(1), pct(last(&g.mem_ctrl_hist)), Graph::percent().series(&g.mem_ctrl_hist, color::series(1)).name("busy")))
                 .child(small(
                     "Temperature",
                     color::temp(),
                     g.temp.map(|t| format!("{t:.0} °C")).unwrap_or_default(),
-                    Graph::new().max(g.temp_max).series(&g.temp_hist, color::temp()).fit(),
+                    Graph::new().max(g.temp_max).fmt(fmt_celsius).series(&g.temp_hist, color::temp()).name("gpu").fit(),
                 )),
         )
         .child(

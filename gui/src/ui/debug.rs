@@ -11,7 +11,7 @@ use super::{
     HwlensView,
     history::{local_time, now},
     procs::button,
-    widgets::{Graph, MONO, card, color, graph_box, legend, stat, sub, title},
+    widgets::{Graph, MONO, card, chip, color, graph_card, overlay, overlay_row, legend, stat, sub, title},
 };
 
 /// Timeline points kept: one per SAMPLE_TICKS ticks, a day at 1 s ticks.
@@ -297,21 +297,41 @@ impl HwlensView {
         let rss: Vec<f32> = d.timeline.iter().map(|p| p.rss as f32 * 1024.).collect();
         let gpu: Vec<f32> = d.timeline.iter().map(|p| p.gpu as f32 * 1024.).collect();
         let anon: Vec<f32> = d.timeline.iter().map(|p| p.anon as f32 * 1024.).collect();
-        let g = Graph::new().min_max(64. * 1048576.).grid().fit().series(&rss, color::text()).series(&gpu, color::gpu()).series(&anon, color::mem());
+        let mut g = Graph::new()
+            .min_max(64. * 1048576.)
+            .grid()
+            .fit()
+            .fmt(super::widgets::fmt_bytes)
+            .series(&rss, color::text())
+            .name("RSS")
+            .series(&gpu, color::gpu())
+            .name("GPU driver")
+            .series(&anon, color::mem())
+            .name("anonymous");
+        if let Some(p) = d.timeline.back() {
+            g = g.time(p.t as f64, SAMPLE_TICKS as f64 * self.model.as_ref().map(|m| m.update_ms as f64 / 1000.).unwrap_or(1.0));
+        }
         let scale = crate::model::bytes(g.scale(rss.len() as f32 * g.step) as u64);
-        let timeline = card()
-            .gap_2()
-            .child(title(format!("Memory over time · every {SAMPLE_TICKS} s · {} points", d.timeline.len()), color::text()))
-            .child(graph_box(g, 140., Some(scale)))
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .child(legend(color::text(), "RSS", mb(r.rss_kb)))
-                    .child(legend(color::gpu(), "GPU driver", mb(r.gpu_kb)))
-                    .child(legend(color::mem(), "anonymous", mb(r.anon_kb))),
-            )
-            .children(d.timeline.front().map(|p| sub(format!("first point {}: RSS {} · GPU {}", local_time(p.t, true), mb(p.rss), mb(p.gpu)))));
+        let timeline = graph_card(
+            g,
+            200.,
+            overlay()
+                .child(
+                    overlay_row()
+                        .child(chip(title(format!("Memory over time · every {SAMPLE_TICKS} s · {} points", d.timeline.len()), color::text())))
+                        .child(div().flex_1())
+                        .child(chip(sub(scale))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(chip(legend(color::text(), "RSS", mb(r.rss_kb))))
+                        .child(chip(legend(color::gpu(), "GPU driver", mb(r.gpu_kb))))
+                        .child(chip(legend(color::mem(), "anonymous", mb(r.anon_kb)))),
+                )
+                .children(d.timeline.front().map(|p| chip(sub(format!("first point {}: RSS {} · GPU {}", local_time(p.t, true), mb(p.rss), mb(p.gpu)))))),
+        );
 
         let mut maps = card().gap_1().child(
             div()

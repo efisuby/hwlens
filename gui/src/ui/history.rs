@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{
     HwlensView,
-    widgets::{Graph, MONO, Tracked, card, color, graph_box, legend, stat, sub, title},
+    widgets::{Graph, MONO, card, chip, color, graph_panel, overlay, overlay_row, legend, stat, sub, title},
 };
 use crate::model::{bytes, rate};
 
@@ -94,12 +94,6 @@ impl HistData {
             return (0.0, 0.0);
         }
         (present.iter().sum::<f32>() / present.len() as f32, present.iter().copied().fold(0.0, f32::max))
-    }
-
-    /// The grid time for a horizontal position (0..=1).
-    pub fn time_at(&self, fraction: f32) -> i64 {
-        let i = (fraction.clamp(0.0, 1.0) * (self.len - 1) as f32).round() as i64;
-        self.from + i * self.step
     }
 
     pub fn fraction_of(&self, t: i64) -> Option<f32> {
@@ -195,9 +189,11 @@ impl HwlensView {
         cx.notify();
     }
 
-    fn history_pick(&mut self, fraction: f32, cx: &mut Context<Self>) {
-        let Some(d) = &self.history.data else { return };
-        let t = d.time_at(fraction);
+    /// Picks the minute under the mouse (the hovered time all graphs share).
+    fn history_pick_hovered(&mut self, cx: &mut Context<Self>) {
+        let (Some(d), Some(hover)) = (&self.history.data, self.hover) else { return };
+        let i = ((hover - d.from as f64) / d.step as f64).round().clamp(0.0, (d.len - 1) as f64) as i64;
+        let t = d.from + i * d.step;
         self.history.selected = Some(t);
         self.history.sample = None;
         if let Err(e) = self.requests.history(json!({"at": t})) {
@@ -253,32 +249,25 @@ impl HwlensView {
             if lines.is_empty() {
                 continue;
             }
-            let mut g = Graph::new().min_max(c.min_max).fit().grid().marker(marker);
+            let mut g = Graph::new().min_max(c.min_max).fit().grid().marker(marker).fmt(c.fmt).time((d.from + d.span()) as f64, d.step as f64);
             if let Some(m) = c.max {
                 g = g.max(m);
             }
-            let mut legends = div().flex().flex_wrap().gap_3();
+            let mut legends = div().flex().flex_wrap().gap_2();
             for (key, label, col) in &lines {
-                g = g.series(&d.values(key), *col);
+                g = g.series(&d.values(key), *col).name(label);
                 let (a, p) = d.stats(key);
-                legends = legends.child(legend(*col, *label, format!("avg {} · max {}", (c.fmt)(a), (c.fmt)(p))));
+                legends = legends.child(chip(legend(*col, *label, format!("avg {} · max {}", (c.fmt)(a), (c.fmt)(p)))));
             }
-            let track = Tracked::default();
-            g = g.track(track.clone());
-            let label = c.max.map(|m| (c.fmt)(m)).or_else(|| Some((c.fmt)(g.scale(d.len as f32 * g.step))));
+            let scale = c.max.map(|m| (c.fmt)(m)).unwrap_or_else(|| (c.fmt)(g.scale(d.len as f32 * g.step)));
+            let overlay = overlay()
+                .child(overlay_row().child(chip(title(c.title, c.accent))).child(div().flex_1()).child(chip(sub(scale))))
+                .child(legends);
             let plot = div()
                 .id(("hist", i))
                 .cursor_crosshair()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                        if let Some(b) = track.get() {
-                            let f = f32::from(ev.position.x - b.left()) / f32::from(b.size.width).max(1.0);
-                            this.history_pick(f, cx);
-                        }
-                    }),
-                )
-                .child(graph_box(g, 120., label));
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| this.history_pick_hovered(cx)))
+                .child(graph_panel(g, 170., overlay));
             let axis = div()
                 .flex()
                 .text_xs()
@@ -288,7 +277,7 @@ impl HwlensView {
                 .child(local_time(d.from + d.span() / 2, with_date))
                 .child(div().flex_1())
                 .child(local_time(d.from + d.span(), with_date));
-            cards.push(card().gap_2().child(title(c.title, c.accent)).child(plot).child(axis).child(legends));
+            cards.push(card().gap_1().p_2().child(plot).child(axis));
         }
         let (left, right): (Vec<_>, Vec<_>) = cards.into_iter().enumerate().partition(|(i, _)| i % 2 == 0);
         let column = |v: Vec<(usize, Div)>| div().flex_1().min_w(px(420.)).flex().flex_col().gap_3().children(v.into_iter().map(|(_, c)| c));
@@ -384,9 +373,6 @@ mod tests {
         assert_eq!(d.series["mem"][2], None);
         assert_eq!(d.stats("cpu"), (30.0, 50.0));
         assert_eq!(d.values("cpu")[1], 0.0);
-        assert_eq!(d.time_at(0.0), 1000);
-        assert_eq!(d.time_at(1.0), 1300);
-        assert_eq!(d.time_at(0.41), 1120);
         assert_eq!(d.fraction_of(1150), Some(0.5));
         assert_eq!(d.fraction_of(5000), None);
     }

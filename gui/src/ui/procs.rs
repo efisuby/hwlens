@@ -449,16 +449,16 @@ impl HwlensView {
             .child(stat("State", format!("{} ({})", p.state, state_name(p.state))))
             .child(stat("Threads / nice", format!("{} / {}", p.threads, p.nice)))
             .child(stat("CPU", format!("{:.1} % ({:.1} % of the whole CPU)", p.cpu, p.cpu / cores)))
-            .child(graph_box(Graph::new().max(cpu_scale).series(&cpu_hist, color::cpu()).grid(), 70., Some(format!("{cpu_scale:.0} %"))))
+            .child(graph_box(Graph::new().max(cpu_scale).fmt(super::widgets::fmt_pct).series(&cpu_hist, color::cpu()).name("cpu").grid(), 70., Some(format!("{cpu_scale:.0} %"))))
             .child(stat("Memory (peak seen)", format!("{} ({})", bytes(p.mem), bytes(mem_peak as u64))))
-            .child(graph_box(Graph::new().min_max(1.).series(&mem_hist, color::mem()).grid(), 70., Some(bytes(mem_peak as u64))))
+            .child(graph_box(Graph::new().min_max(1.).fmt(super::widgets::fmt_bytes).series(&mem_hist, color::mem()).name("mem").grid(), 70., Some(bytes(mem_peak as u64))))
             .child(stat(
                 "Disk read / write",
                 format!("{} / {}", crate::model::rate(p.io_read), crate::model::rate(p.io_write)),
             ))
             .when(io_hist.iter().any(|&x| x > 0.0), |d| {
                 d.child(graph_box(
-                    Graph::new().max(io_scale).series(&io_hist, color::disk()).grid(),
+                    Graph::new().max(io_scale).fmt(super::widgets::fmt_rate).series(&io_hist, color::disk()).name("r+w").grid(),
                     50.,
                     Some(crate::model::rate(io_scale)),
                 ))

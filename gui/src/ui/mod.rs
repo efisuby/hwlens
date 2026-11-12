@@ -90,6 +90,14 @@ pub struct HwlensView {
     /// Favorite keys in display order (fav.rs), saved in ~/.config/hwlens/gui.json.
     favorites: Vec<String>,
     debug: debug::DebugState,
+    /// The unix time under the mouse on any graph; every graph draws a line there.
+    hover: Option<f64>,
+    /// When the latest live snapshot arrived (the time of the last sample of live graphs).
+    live_last: f64,
+    /// The page of the previous frame (graph geometry is per page).
+    drawn_page: Option<Page>,
+    /// --debug-hover: the cursor stays this many seconds before the latest sample.
+    debug_hover: Option<f64>,
     focus: FocusHandle,
     scroll: UniformListScrollHandle,
     _events: Task<()>,
@@ -125,6 +133,10 @@ impl HwlensView {
             svc_scroll: UniformListScrollHandle::new(),
             favorites,
             debug: debug::DebugState::default(),
+            hover: None,
+            live_last: widgets::unix_now(),
+            drawn_page: None,
+            debug_hover: None,
             focus,
             scroll: UniformListScrollHandle::new(),
             _events: events,
@@ -139,6 +151,10 @@ impl HwlensView {
                     self.debug.sample();
                 }
                 if m.tick {
+                    self.live_last = widgets::unix_now();
+                    if let Some(ago) = self.debug_hover {
+                        self.hover = Some(self.live_last - ago);
+                    }
                     self.procs.record(&m);
                     self.record_sensors(&m);
                 }
@@ -170,6 +186,21 @@ impl HwlensView {
             Event::Services(Update::Journal { scope, unit, text }) => self.svc.journal = Some((scope, unit, text)),
         }
         cx.notify();
+    }
+
+    pub fn with_debug_hover(mut self, ago: Option<f64>) -> Self {
+        self.debug_hover = ago;
+        self
+    }
+
+    pub(super) fn set_hover(&mut self, t: Option<f64>, cx: &mut Context<Self>) {
+        if self.debug_hover.is_some() {
+            return;
+        }
+        if self.hover != t {
+            self.hover = t;
+            cx.notify();
+        }
     }
 
     /// The services thread polls for the Services page, and for service favorites on the overview.
@@ -449,6 +480,13 @@ impl Render for HwlensView {
         self.debug.saw_size(f32::from(size.width), f32::from(size.height));
         let m = self.model.clone();
         let pins = self.pins(cx);
+        let live_dt = m.as_ref().map(|m| m.update_ms as f64 / 1000.).unwrap_or(1.0);
+        let page_changed = self.drawn_page != Some(self.page);
+        if page_changed && self.debug_hover.is_none() {
+            self.hover = None;
+        }
+        self.drawn_page = Some(self.page);
+        widgets::begin_frame(self.hover, self.live_last, live_dt, cx.entity().downgrade(), page_changed);
         let root = div()
             .key_context("hwlens")
             .track_focus(&self.focus)

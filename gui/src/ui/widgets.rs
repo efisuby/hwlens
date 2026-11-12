@@ -24,6 +24,9 @@ pub mod color {
     pub fn temp() -> Rgba { rgb(0xff7a7a) }
     pub fn warn() -> Rgba { rgb(0xffb547) }
     pub fn bad() -> Rgba { rgb(0xff5c6c) }
+    /// Behind text drawn over a graph.
+    pub fn backdrop() -> Rgba { Rgba { r: 0.09, g: 0.10, b: 0.13, a: 0.72 } }
+    pub fn tooltip() -> Rgba { Rgba { r: 0.07, g: 0.08, b: 0.10, a: 0.92 } }
 
     /// Distinct colors for stacked or multi-series graphs.
     pub fn series(i: usize) -> Rgba {
@@ -127,9 +130,29 @@ pub fn segments(parts: Vec<(f32, Rgba)>, height: f32) -> Div {
     )
 }
 
+/// Formats a value for the hover tooltip.
+pub type Fmt = fn(f32) -> String;
+
+fn fmt_plain(v: f32) -> String {
+    if v.abs() >= 100.0 { format!("{v:.0}") } else { format!("{v:.1}") }
+}
+pub fn fmt_pct(v: f32) -> String {
+    format!("{v:.1} %")
+}
+pub fn fmt_rate(v: f32) -> String {
+    crate::model::rate(v)
+}
+pub fn fmt_bytes(v: f32) -> String {
+    crate::model::bytes(v.max(0.0) as u64)
+}
+pub fn fmt_celsius(v: f32) -> String {
+    format!("{v:.0} °C")
+}
+
 #[derive(Clone)]
 pub struct Graph {
-    pub series: Vec<(Vec<f32>, Rgba)>,
+    /// Values oldest first, color, name for the tooltip.
+    pub series: Vec<(Vec<f32>, Rgba, &'static str)>,
     /// Top of the scale; None: the largest visible value (at least `min_max`).
     pub max: Option<f32>,
     pub min_max: f32,
@@ -142,22 +165,44 @@ pub struct Graph {
     pub fit: bool,
     /// A vertical line at this fraction of the width (a selected moment).
     pub marker: Option<f32>,
-    /// Receives the painted bounds, so clicks can be mapped to a position.
-    pub track: Option<Tracked>,
+    /// Unix time of the last sample and seconds per sample; None: the live data of hwlensd.
+    pub time: Option<(f64, f64)>,
+    pub fmt: Fmt,
+    /// Set by graph_area: the slot that remembers this graph's geometry, and the hovered time.
+    slot: Option<usize>,
+    hover: Option<f64>,
 }
-
-/// Bounds of a painted element, written during paint and read by mouse handlers.
-pub type Tracked = std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>;
 
 impl Graph {
     pub fn new() -> Self {
-        Graph { series: Vec::new(), max: None, min_max: 1.0, stacked: false, grid: false, line: true, step: 2.0, fit: false, marker: None, track: None }
+        Graph {
+            series: Vec::new(),
+            max: None,
+            min_max: 1.0,
+            stacked: false,
+            grid: false,
+            line: true,
+            step: 2.0,
+            fit: false,
+            marker: None,
+            time: None,
+            fmt: fmt_plain,
+            slot: None,
+            hover: None,
+        }
     }
     pub fn percent() -> Self {
-        Graph { max: Some(100.0), ..Graph::new() }
+        Graph { max: Some(100.0), fmt: fmt_pct, ..Graph::new() }
     }
     pub fn series(mut self, values: &[f32], col: Rgba) -> Self {
-        self.series.push((values.to_vec(), col));
+        self.series.push((values.to_vec(), col, ""));
+        self
+    }
+    /// Names the last added series in the tooltip.
+    pub fn name(mut self, name: &'static str) -> Self {
+        if let Some(s) = self.series.last_mut() {
+            s.2 = name;
+        }
         self
     }
     pub fn max(mut self, max: f32) -> Self {
@@ -185,9 +230,23 @@ impl Graph {
         self.marker = at;
         self
     }
-    pub fn track(mut self, t: Tracked) -> Self {
-        self.track = Some(t);
+    pub fn fmt(mut self, f: Fmt) -> Self {
+        self.fmt = f;
         self
+    }
+    /// The samples are `dt` seconds apart and the last one is at unix time `last`.
+    pub fn time(mut self, last: f64, dt: f64) -> Self {
+        self.time = Some((last, dt));
+        self
+    }
+
+    fn longest(&self) -> usize {
+        self.series.iter().map(|(v, _, _)| v.len()).max().unwrap_or(0)
+    }
+
+    /// Pixels per sample at a width.
+    fn step_for(&self, w: f32) -> f32 {
+        if self.fit { w / self.longest().saturating_sub(1).max(1) as f32 } else { self.step }
     }
 
     /// The scale the graph would use for a given width (for an axis label).
@@ -195,13 +254,13 @@ impl Graph {
         if let Some(m) = self.max {
             return m;
         }
-        let n = (width_px / self.step) as usize + 1;
+        let n = ((width_px / self.step_for(width_px)) as usize).saturating_add(1);
         let tail = |v: &Vec<f32>| v.iter().rev().take(n).copied().collect::<Vec<_>>();
         let peak = if self.stacked {
-            let tails: Vec<Vec<f32>> = self.series.iter().map(|(v, _)| tail(v)).collect();
-            (0..n).map(|i| tails.iter().filter_map(|t| t.get(i)).sum::<f32>()).fold(0.0, f32::max)
+            let tails: Vec<Vec<f32>> = self.series.iter().map(|(v, _, _)| tail(v)).collect();
+            (0..n.min(self.longest())).map(|i| tails.iter().filter_map(|t| t.get(i)).sum::<f32>()).fold(0.0, f32::max)
         } else {
-            self.series.iter().flat_map(|(v, _)| tail(v)).fold(0.0, f32::max)
+            self.series.iter().flat_map(|(v, _, _)| tail(v)).fold(0.0, f32::max)
         };
         // Round up to a "nice" number so the scale does not twitch every tick.
         nice_ceil(peak.max(self.min_max))
@@ -212,13 +271,10 @@ impl Graph {
             |_, _, _| {},
             move |bounds, (), window, _: &mut App| {
                 let mut this = self;
-                if let Some(t) = &this.track {
-                    t.set(Some(bounds));
-                }
                 let w = f32::from(bounds.size.width);
-                if this.fit {
-                    let longest = this.series.iter().map(|(v, _)| v.len()).max().unwrap_or(0);
-                    this.step = w / longest.saturating_sub(1).max(1) as f32;
+                this.step = this.step_for(w);
+                if let Some(slot) = this.slot {
+                    remember(slot, bounds, this.step);
                 }
                 let this = this;
                 let h = f32::from(bounds.size.height);
@@ -232,7 +288,7 @@ impl Graph {
                 let n_fit = (w / this.step) as usize + 1;
                 let y_of = |v: f32| bounds.top() + px(h - (v / max).clamp(0.0, 1.0) * h);
                 let mut base: Vec<f32> = Vec::new();
-                for (values, col) in &this.series {
+                for (values, col, _) in &this.series {
                     let n = n_fit.min(values.len());
                     if n < 2 {
                         continue;
@@ -286,9 +342,23 @@ impl Graph {
                         }
                     }
                 }
+                let vline = |x: gpui::Pixels, col: Rgba, window: &mut gpui::Window| {
+                    window.paint_quad(fill(gpui::Bounds::new(point(x.round(), bounds.top()), size(px(1.), bounds.size.height)), col));
+                };
                 if let Some(f) = this.marker {
-                    let x = bounds.left() + px((f.clamp(0.0, 1.0) * w).round());
-                    window.paint_quad(fill(gpui::Bounds::new(point(x, bounds.top()), size(px(1.), bounds.size.height)), color::text()));
+                    vline(bounds.left() + px(f.clamp(0.0, 1.0) * w), color::text(), window);
+                }
+                // The hovered moment, on this graph and on every other one showing that time.
+                if let (Some(t), Some((last, dt))) = (this.hover, this.time) {
+                    let age = (last - t) / dt;
+                    if age >= -0.5 && age <= (this.longest().saturating_sub(1)) as f64 + 0.5 {
+                        let x = bounds.right() - px(this.step * age as f32);
+                        if x >= bounds.left() {
+                            let mut c = color::text();
+                            c.a = 0.55;
+                            vline(x, c, window);
+                        }
+                    }
                 }
             },
         )
@@ -296,19 +366,178 @@ impl Graph {
     }
 }
 
-/// A graph in a box of fixed height, with an optional top-right scale label.
-pub fn graph_box(g: Graph, height: f32, label: Option<String>) -> Div {
+/// Hover state shared by every graph of a frame. Set by the view before it renders
+/// (`begin_frame`); only the UI thread draws, so a thread-local is enough.
+struct HoverState {
+    /// The hovered unix time, if the mouse is over a graph.
+    t: Option<f64>,
+    /// When the latest live snapshot arrived, and seconds per live sample.
+    live_last: f64,
+    live_dt: f64,
+    view: Option<gpui::WeakEntity<super::HwlensView>>,
+    /// Graphs of the frame are numbered in build order, which is stable from frame to frame;
+    /// their painted bounds and pixels per sample are kept for the mouse and the tooltip.
+    next: usize,
+    geometry: std::collections::HashMap<usize, (gpui::Bounds<gpui::Pixels>, f32)>,
+}
+
+thread_local! {
+    static HOVER: std::cell::RefCell<HoverState> = std::cell::RefCell::new(HoverState {
+        t: None,
+        live_last: 0.0,
+        live_dt: 1.0,
+        view: None,
+        next: 0,
+        geometry: Default::default(),
+    });
+}
+
+pub fn begin_frame(t: Option<f64>, live_last: f64, live_dt: f64, view: gpui::WeakEntity<super::HwlensView>, page_changed: bool) {
+    HOVER.with_borrow_mut(|h| {
+        h.t = t;
+        h.live_last = live_last;
+        h.live_dt = live_dt;
+        h.view = Some(view);
+        h.next = 0;
+        if page_changed {
+            h.geometry.clear();
+        }
+    });
+}
+
+fn remember(slot: usize, bounds: gpui::Bounds<gpui::Pixels>, step: f32) {
+    HOVER.with_borrow_mut(|h| {
+        h.geometry.insert(slot, (bounds, step));
+    });
+}
+
+fn set_hover(t: Option<f64>, cx: &mut App) {
+    let view = HOVER.with_borrow(|h| h.view.clone());
+    if let Some(v) = view {
+        let _ = v.update(cx, |view, cx| view.set_hover(t, cx));
+    }
+}
+
+/// Unix time now, with fractions.
+pub fn unix_now() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// A graph filling its box, with the hover line and, for boxes tall enough, a tooltip with the
+/// values at the hovered moment. `overlay` is drawn over the graph (text on a dim backdrop).
+fn graph_area(mut g: Graph, overlay: Option<Div>, label: Option<String>, tooltip: bool) -> gpui::Stateful<Div> {
+    let (slot, hover, live_last, live_dt, geo) = HOVER.with_borrow_mut(|h| {
+        let slot = h.next;
+        h.next += 1;
+        (slot, h.t, h.live_last, h.live_dt, h.geometry.get(&slot).copied())
+    });
+    let live = g.time.is_none();
+    let (last, dt) = *g.time.get_or_insert((live_last, live_dt));
+    g.slot = Some(slot);
+    g.hover = hover;
+
+    // Tooltip from the previous frame's geometry: the layout does not move between frames.
+    let mut tip = None;
+    if let (true, Some(t), Some((b, step))) = (tooltip, hover, geo) {
+        let age = (last - t) / dt;
+        let longest = g.longest();
+        let w = f32::from(b.size.width);
+        let x = w - step * age as f32;
+        if longest > 0 && age > -0.5 && age < longest as f64 - 0.5 && x >= 0.0 {
+            let mut rows = div().flex().flex_col().gap(px(1.)).text_xs().font_family(MONO).child(
+                div().text_color(color::muted()).child(if live {
+                    if age < 0.5 { "now".to_string() } else { format!("−{:.0} s", age * dt) }
+                } else {
+                    super::history::local_time(t.round() as i64, true)
+                }),
+            );
+            let i = age.round() as usize;
+            for (values, col, name) in &g.series {
+                let Some(v) = values.len().checked_sub(1 + i).and_then(|k| values.get(k)) else { continue };
+                rows = rows.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().size(px(6.)).rounded_sm().bg(*col))
+                        .when(!name.is_empty(), |d| d.child(div().text_color(color::muted()).child(*name)))
+                        .child((g.fmt)(*v)),
+                );
+            }
+            let boxed = rows.px_1().py(px(2.)).rounded_sm().bg(color::tooltip()).border_1().border_color(color::border());
+            // Right of the line, or left of it near the right edge.
+            // At the bottom: text drawn over graphs sits at the top.
+            tip = Some(if x < w - 150.0 {
+                div().absolute().bottom(px(4.)).left(px(x + 6.0)).child(boxed)
+            } else {
+                div().absolute().bottom(px(4.)).right(px(w - x + 6.0)).child(boxed)
+            });
+        }
+    }
+
+    // No w_full: a percentage width inside a stretched flex column resolves wrong in taffy;
+    // the parent's stretch gives the width. The root is a flex column so the overlay stretches too.
     div()
+        .id(("graph", slot))
         .relative()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .on_mouse_move(move |ev: &gpui::MouseMoveEvent, _, cx| {
+            let Some((b, step)) = HOVER.with_borrow(|h| h.geometry.get(&slot).copied()) else { return };
+            let age = f32::from(b.right() - ev.position.x) / step.max(0.001);
+            set_hover(Some(last - age as f64 * dt), cx);
+        })
+        .on_hover(|hovered: &bool, _, cx| {
+            if !*hovered {
+                set_hover(None, cx);
+            }
+        })
+        .child(div().absolute().top_0().left_0().right_0().bottom_0().child(g.render()))
+        .children(label.map(|l| div().absolute().top(px(2.)).right(px(4.)).text_xs().text_color(color::faint()).child(l)))
+        .children(overlay)
+        .children(tip)
+}
+
+/// A graph in a box of fixed height, with an optional top-right scale label.
+pub fn graph_box(g: Graph, height: f32, label: Option<String>) -> gpui::Stateful<Div> {
+    graph_area(g, None, label, height >= 60.0).h(px(height)).rounded_md().bg(color::bg())
+}
+
+/// A graph box with `content` drawn over it (see graph_card), for use inside a card.
+pub fn graph_panel(g: Graph, height: f32, content: Div) -> gpui::Stateful<Div> {
+    graph_area(g, Some(div().relative().p_2().flex().flex_col().child(content)), None, height >= 100.0)
         .h(px(height))
-        .w_full()
         .rounded_md()
         .bg(color::bg())
-        .overflow_hidden()
-        .child(div().absolute().top_0().left_0().right_0().bottom_0().child(g.render()))
-        .children(label.map(|l| {
-            div().absolute().top(px(2.)).right(px(4.)).text_xs().text_color(color::faint()).child(l)
-        }))
+}
+
+/// A card that is all graph: `content` (title, values, legend) sits on top of it, each piece
+/// on a dim backdrop (use `chip`). Saves the space a graph under the text would take.
+pub fn graph_card(g: Graph, height: f32, content: Div) -> gpui::Stateful<Div> {
+    graph_area(g, Some(div().relative().p_3().flex().flex_col().child(content)), None, height >= 100.0)
+        .h(px(height))
+        .rounded_lg()
+        .bg(color::card())
+        .border_1()
+        .border_color(color::border())
+}
+
+/// Content over a graph: a column whose pieces keep their own width (and backdrop).
+pub fn overlay() -> Div {
+    div().flex().flex_col().items_start().gap_1()
+}
+
+/// A row across the whole graph (title left, value right) among content laid out at the start.
+pub fn overlay_row() -> Div {
+    let mut d = div().flex().items_center().gap_2();
+    d.style().align_self = Some(gpui::AlignItems::Stretch);
+    d
+}
+
+/// Text over a graph: a dim, rounded backdrop that keeps it readable.
+pub fn chip(d: Div) -> Div {
+    d.px_1().rounded_sm().bg(color::backdrop())
 }
 
 pub fn nice_ceil(v: f32) -> f32 {

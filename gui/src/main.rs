@@ -15,15 +15,19 @@ use gpui::{
 struct Args {
     socket: PathBuf,
     page: ui::Page,
+    /// Hidden: keep the graph cursor N seconds in the past (screenshots of the hover line).
+    debug_hover: Option<f64>,
 }
 
 fn args() -> Args {
     let mut socket = None;
     let mut page = ui::Page::Overview;
+    let mut debug_hover = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--socket" | "-s" => socket = args.next().map(PathBuf::from),
+            "--debug-hover" => debug_hover = args.next().and_then(|v| v.parse().ok()),
             "--page" | "-p" => {
                 let name = args.next().unwrap_or_default();
                 page = ui::Page::from_name(&name).unwrap_or_else(|| {
@@ -48,11 +52,11 @@ fn args() -> Args {
     let socket = socket
         .or_else(|| std::env::var_os("HWLENSD_SOCKET").map(PathBuf::from))
         .unwrap_or_else(|| client::DEFAULT_SOCKET.into());
-    Args { socket, page }
+    Args { socket, page, debug_hover }
 }
 
 fn main() {
-    let Args { socket, page } = args();
+    let Args { socket, page, debug_hover } = args();
     Application::new().run(move |cx: &mut App| {
         let (tx, rx) = futures::channel::mpsc::unbounded();
         let services = services::Services::start(tx.clone());
@@ -67,7 +71,7 @@ fn main() {
                 window_min_size: Some(size(px(900.), px(600.))),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, services, page, rx, window, cx)),
+            |window, cx| cx.new(|cx| ui::HwlensView::new(requests, services, page, rx, window, cx).with_debug_hover(debug_hover)),
         )
         .expect("open the window");
         cx.on_window_closed(|cx| {
